@@ -1,0 +1,23 @@
+name: WhatsApp Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  whatsapp-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pakete installieren
+        run: npm install
+
+      - name: Bot starten
+        run: npm start
