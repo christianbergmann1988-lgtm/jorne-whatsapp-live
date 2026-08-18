@@ -13,12 +13,8 @@ async function startBot() {
   const client = new Client({
     authStrategy: new RemoteAuth({
       clientId: 'jorne-whatsapp-live',
-      store: store,
-
-      // Workaround für den aktuellen RemoteAuth-ZIP-Pfadfehler
+      store,
       dataPath: '.',
-
-      // Sitzung alle 60 Sekunden sichern
       backupSyncIntervalMs: 60000
     }),
 
@@ -30,13 +26,6 @@ async function startBot() {
         '--disable-dev-shm-usage'
       ]
     }
-  });
-
-  client.on('code', (code) => {
-    console.log('================================');
-    console.log('WHATSAPP KOPPLUNGSCODE:');
-    console.log(code);
-    console.log('================================');
   });
 
   client.on('authenticated', () => {
@@ -56,26 +45,12 @@ async function startBot() {
   });
 
   client.on('disconnected', (reason) => {
-    console.log('⚠️ WhatsApp getrennt:', reason);
+    console.log('⚠️ WhatsApp wurde getrennt:', reason);
   });
 
-  console.log('Starte WhatsApp...');
+  console.log('Starte WhatsApp und versuche gespeicherte Sitzung zu laden...');
 
   await client.initialize();
-
-  // Nur wenn noch keine bestehende Anmeldung vorhanden ist
-  if (!client.info) {
-    console.log('📱 Fordere Kopplungscode an...');
-
-    const code = await client.requestPairingCode(
-      process.env.WHATSAPP_PHONE
-    );
-
-    console.log('================================');
-    console.log('WHATSAPP KOPPLUNGSCODE:');
-    console.log(code);
-    console.log('================================');
-  }
 }
 
 startBot().catch((error) => {
