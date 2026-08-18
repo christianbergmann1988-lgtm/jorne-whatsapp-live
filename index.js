@@ -48,9 +48,18 @@ async function startBot() {
     console.log('⚠️ WhatsApp wurde getrennt:', reason);
   });
 
-  console.log('Starte WhatsApp und versuche gespeicherte Sitzung zu laden...');
-
   await client.initialize();
+
+  console.log('📱 Fordere Kopplungscode an...');
+
+  const code = await client.requestPairingCode(
+    process.env.WHATSAPP_PHONE
+  );
+
+  console.log('================================');
+  console.log('WHATSAPP KOPPLUNGSCODE:');
+  console.log(code);
+  console.log('================================');
 }
 
 startBot().catch((error) => {
