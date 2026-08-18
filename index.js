@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function startBot() {
   console.log('Verbinde mit MongoDB...');
 
@@ -45,21 +47,51 @@ async function startBot() {
   });
 
   client.on('disconnected', (reason) => {
-    console.log('⚠️ WhatsApp wurde getrennt:', reason);
+    console.log('⚠️ WhatsApp getrennt:', reason);
   });
 
-  await client.initialize();
+  console.log('Starte WhatsApp...');
+  client.initialize();
 
-  console.log('📱 Fordere Kopplungscode an...');
+  console.log('⏳ Warte 20 Sekunden, bis WhatsApp Web vollständig geladen ist...');
+  await sleep(20000);
 
-  const code = await client.requestPairingCode(
-    process.env.WHATSAPP_PHONE
-  );
+  let pairingCode = null;
 
-  console.log('================================');
-  console.log('WHATSAPP KOPPLUNGSCODE:');
-  console.log(code);
-  console.log('================================');
+  for (let versuch = 1; versuch <= 4; versuch++) {
+    try {
+      console.log(`📱 Kopplungscode anfordern – Versuch ${versuch}/4...`);
+
+      pairingCode = await client.requestPairingCode(
+        process.env.WHATSAPP_PHONE,
+        true,
+        180000
+      );
+
+      if (pairingCode) {
+        console.log('================================');
+        console.log('WHATSAPP KOPPLUNGSCODE:');
+        console.log(pairingCode);
+        console.log('================================');
+        break;
+      }
+    } catch (error) {
+      console.log(`⚠️ Versuch ${versuch} fehlgeschlagen.`);
+
+      if (versuch < 4) {
+        console.log('⏳ Warte 15 Sekunden und versuche es erneut...');
+        await sleep(15000);
+      }
+    }
+  }
+
+  if (!pairingCode) {
+    throw new Error(
+      'Nach 4 Versuchen konnte kein WhatsApp-Kopplungscode erzeugt werden.'
+    );
+  }
+
+  console.log('⏳ Bot bleibt jetzt aktiv. Kopplung am Handy durchführen.');
 }
 
 startBot().catch((error) => {
