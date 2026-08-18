@@ -1,4 +1,4 @@
-const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const mongoose = require('mongoose');
 const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
@@ -7,7 +7,6 @@ async function startBot() {
   console.log('Verbinde mit MongoDB...');
 
   await mongoose.connect(process.env.MONGODB_URI);
-
   console.log('✅ MongoDB verbunden.');
 
   const store = new MongoStore({ mongoose });
@@ -28,9 +27,19 @@ async function startBot() {
     }
   });
 
-  client.on('qr', (qr) => {
-    console.log('📱 WhatsApp QR-Code:');
-    qrcode.generate(qr, { small: true });
+  client.on('qr', async (qr) => {
+    console.log('📱 Neuer WhatsApp-QR-Code erhalten.');
+
+    try {
+      await QRCode.toFile('whatsapp-qr.png', qr, {
+        width: 600,
+        margin: 4
+      });
+
+      console.log('✅ QR-Code als whatsapp-qr.png gespeichert.');
+    } catch (error) {
+      console.error('❌ QR-Code konnte nicht gespeichert werden:', error);
+    }
   });
 
   client.on('authenticated', () => {
