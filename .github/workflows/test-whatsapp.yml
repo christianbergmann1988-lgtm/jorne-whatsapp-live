@@ -22,4 +22,31 @@ jobs:
       - name: Bot starten
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-        run: npm start
+        run: |
+          npm start &
+          BOT_PID=$!
+
+          echo "Warte auf QR-Code..."
+          for i in {1..60}; do
+            if [ -f whatsapp-qr.png ]; then
+              echo "QR-Code gefunden."
+              break
+            fi
+            sleep 2
+          done
+
+          sleep 10
+
+          if [ -f whatsapp-qr.png ]; then
+            echo "QR-Code ist bereit."
+          else
+            echo "Kein QR-Code erzeugt."
+          fi
+
+      - name: WhatsApp QR-Code hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-qr-code
+          path: whatsapp-qr.png
+          if-no-files-found: ignore
