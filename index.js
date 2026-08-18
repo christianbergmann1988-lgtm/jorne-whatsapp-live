@@ -1,4 +1,3 @@
-const QRCode = require('qrcode');
 const mongoose = require('mongoose');
 const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
@@ -27,19 +26,8 @@ async function startBot() {
     }
   });
 
-  client.on('qr', async (qr) => {
-    console.log('📱 Neuer WhatsApp-QR-Code erhalten.');
-
-    try {
-      await QRCode.toFile('whatsapp-qr.png', qr, {
-        width: 600,
-        margin: 4
-      });
-
-      console.log('✅ QR-Code als whatsapp-qr.png gespeichert.');
-    } catch (error) {
-      console.error('❌ QR-Code konnte nicht gespeichert werden:', error);
-    }
+  client.on('ready', () => {
+    console.log('✅ WhatsApp-Bot ist bereit.');
   });
 
   client.on('authenticated', () => {
@@ -50,28 +38,24 @@ async function startBot() {
     console.log('💾 WhatsApp-Sitzung wurde in MongoDB gespeichert.');
   });
 
-  client.on('ready', async () => {
-    console.log('✅ WhatsApp-Bot ist bereit.');
-
-    try {
-      const chats = await client.getChats();
-      const channels = chats.filter(chat => chat.isChannel);
-
-      console.log('Gefundene Kanäle:');
-
-      channels.forEach(channel => {
-        console.log(`- ${channel.name} | ${channel.id._serialized}`);
-      });
-    } catch (error) {
-      console.error('❌ Fehler beim Laden der Kanäle:', error);
-    }
-  });
-
   client.on('auth_failure', (msg) => {
     console.error('❌ WhatsApp-Anmeldung fehlgeschlagen:', msg);
   });
 
-  client.initialize();
+  await client.initialize();
+
+  if (!client.info) {
+    console.log('📱 Fordere Kopplungscode an...');
+
+    const code = await client.requestPairingCode(
+      process.env.WHATSAPP_PHONE
+    );
+
+    console.log('================================');
+    console.log('WHATSAPP KOPPLUNGSCODE:');
+    console.log(code);
+    console.log('================================');
+  }
 }
 
 startBot().catch((error) => {
