@@ -13,9 +13,15 @@ async function startBot() {
   const client = new Client({
     authStrategy: new RemoteAuth({
       clientId: 'jorne-whatsapp-live',
-      store,
-      backupSyncIntervalMs: 300000
+      store: store,
+
+      // Workaround für den aktuellen RemoteAuth-ZIP-Pfadfehler
+      dataPath: '.',
+
+      // Sitzung alle 60 Sekunden sichern
+      backupSyncIntervalMs: 60000
     }),
+
     puppeteer: {
       headless: true,
       args: [
@@ -26,12 +32,19 @@ async function startBot() {
     }
   });
 
-  client.on('ready', () => {
-    console.log('✅ WhatsApp-Bot ist bereit.');
+  client.on('code', (code) => {
+    console.log('================================');
+    console.log('WHATSAPP KOPPLUNGSCODE:');
+    console.log(code);
+    console.log('================================');
   });
 
   client.on('authenticated', () => {
     console.log('✅ WhatsApp erfolgreich angemeldet.');
+  });
+
+  client.on('ready', () => {
+    console.log('✅ WhatsApp-Bot ist bereit.');
   });
 
   client.on('remote_session_saved', () => {
@@ -42,8 +55,15 @@ async function startBot() {
     console.error('❌ WhatsApp-Anmeldung fehlgeschlagen:', msg);
   });
 
+  client.on('disconnected', (reason) => {
+    console.log('⚠️ WhatsApp getrennt:', reason);
+  });
+
+  console.log('Starte WhatsApp...');
+
   await client.initialize();
 
+  // Nur wenn noch keine bestehende Anmeldung vorhanden ist
   if (!client.info) {
     console.log('📱 Fordere Kopplungscode an...');
 
