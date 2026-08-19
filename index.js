@@ -60,22 +60,70 @@ async function startBot() {
 
     try {
       const version = await client.getWWebVersion();
-      console.log('📦 Tatsächlich verwendete WhatsApp-Web-Version:', version);
+      console.log(
+        '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
+        version
+      );
     } catch (error) {
       console.log('⚠️ Web-Version konnte nicht gelesen werden.');
+    }
+
+    console.log('🔎 Suche WhatsApp-Kanäle...');
+
+    try {
+      const channels = await client.getChannels();
+
+      console.log('================================');
+      console.log(`📢 Gefundene WhatsApp-Kanäle: ${channels.length}`);
+      console.log('================================');
+
+      if (channels.length === 0) {
+        console.log('⚠️ Keine WhatsApp-Kanäle gefunden.');
+      }
+
+      for (const channel of channels) {
+        const channelId =
+          channel.id?._serialized ||
+          channel.id ||
+          'ID nicht gefunden';
+
+        const channelName =
+          channel.name ||
+          channel.title ||
+          'Name nicht gefunden';
+
+        console.log('--------------------------------');
+        console.log('📢 Kanalname:', channelName);
+        console.log('🆔 Kanal-ID:', channelId);
+      }
+
+      console.log('================================');
+    } catch (error) {
+      console.error(
+        '❌ WhatsApp-Kanäle konnten nicht ausgelesen werden:',
+        error
+      );
     }
   });
 
   client.on('remote_session_saved', () => {
-    console.log('💾 WhatsApp-Sitzung wurde in MongoDB gespeichert.');
+    console.log(
+      '💾 WhatsApp-Sitzung wurde in MongoDB gespeichert.'
+    );
   });
 
   client.on('auth_failure', (msg) => {
-    console.error('❌ WhatsApp-Anmeldung fehlgeschlagen:', msg);
+    console.error(
+      '❌ WhatsApp-Anmeldung fehlgeschlagen:',
+      msg
+    );
   });
 
   client.on('disconnected', (reason) => {
-    console.log('⚠️ WhatsApp getrennt:', reason);
+    console.log(
+      '⚠️ WhatsApp getrennt:',
+      reason
+    );
   });
 
   console.log(
