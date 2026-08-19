@@ -4,6 +4,10 @@ const { Client, RemoteAuth } = require('whatsapp-web.js');
 
 const WEB_VERSION = '2.3000.1031490220-alpha';
 
+// Dein WhatsApp-Kanal-Link:
+// https://whatsapp.com/channel/0029Vb9AGcELikg6ValudB0f
+const CHANNEL_INVITE_CODE = '0029Vb9AGcELikg6ValudB0f';
+
 async function startBot() {
   console.log('Verbinde mit MongoDB...');
 
@@ -60,6 +64,7 @@ async function startBot() {
 
     try {
       const version = await client.getWWebVersion();
+
       console.log(
         '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
         version
@@ -68,39 +73,36 @@ async function startBot() {
       console.log('⚠️ Web-Version konnte nicht gelesen werden.');
     }
 
-    console.log('🔎 Suche WhatsApp-Kanäle...');
+    console.log('🔎 Suche den WhatsApp-Kanal Jorne_L1ve...');
 
     try {
-      const channels = await client.getChannels();
+      const channel =
+        await client.getChannelByInviteCode(CHANNEL_INVITE_CODE);
 
-      console.log('================================');
-      console.log(`📢 Gefundene WhatsApp-Kanäle: ${channels.length}`);
-      console.log('================================');
-
-      if (channels.length === 0) {
-        console.log('⚠️ Keine WhatsApp-Kanäle gefunden.');
+      if (!channel) {
+        console.log('❌ WhatsApp-Kanal wurde nicht gefunden.');
+        return;
       }
 
-      for (const channel of channels) {
-        const channelId =
-          channel.id?._serialized ||
-          channel.id ||
-          'ID nicht gefunden';
+      const channelId =
+        channel.id?._serialized ||
+        channel.id ||
+        'ID nicht gefunden';
 
-        const channelName =
-          channel.name ||
-          channel.title ||
-          'Name nicht gefunden';
-
-        console.log('--------------------------------');
-        console.log('📢 Kanalname:', channelName);
-        console.log('🆔 Kanal-ID:', channelId);
-      }
+      const channelName =
+        channel.name ||
+        channel.title ||
+        'Jorne_L1ve';
 
       console.log('================================');
+      console.log('✅ WHATSAPP-KANAL GEFUNDEN');
+      console.log('📢 Kanalname:', channelName);
+      console.log('🆔 Kanal-ID:', channelId);
+      console.log('================================');
+
     } catch (error) {
       console.error(
-        '❌ WhatsApp-Kanäle konnten nicht ausgelesen werden:',
+        '❌ Fehler beim Abrufen des WhatsApp-Kanals:',
         error
       );
     }
