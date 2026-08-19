@@ -3,10 +3,7 @@ const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
 const WEB_VERSION = '2.3000.1031490220-alpha';
-
-// Dein WhatsApp-Kanal-Link:
-// https://whatsapp.com/channel/0029Vb9AGcELikg6ValudB0f
-const CHANNEL_INVITE_CODE = '0029Vb9AGcELikg6ValudB0f';
+const TEST_TEXT = 'BOT-TEST 12345';
 
 async function startBot() {
   console.log('Verbinde mit MongoDB...');
@@ -64,7 +61,6 @@ async function startBot() {
 
     try {
       const version = await client.getWWebVersion();
-
       console.log(
         '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
         version
@@ -73,36 +69,71 @@ async function startBot() {
       console.log('⚠️ Web-Version konnte nicht gelesen werden.');
     }
 
-    console.log('🔎 Suche den WhatsApp-Kanal Jorne_L1ve...');
+    console.log(`🔎 Suche Testnachricht: "${TEST_TEXT}"`);
 
     try {
-      const channel =
-        await client.getChannelByInviteCode(CHANNEL_INVITE_CODE);
+      const messages = await client.searchMessages(TEST_TEXT, {
+        limit: 20
+      });
 
-      if (!channel) {
-        console.log('❌ WhatsApp-Kanal wurde nicht gefunden.');
+      console.log('================================');
+      console.log(`🔎 Gefundene Nachrichten: ${messages.length}`);
+      console.log('================================');
+
+      if (messages.length === 0) {
+        console.log('❌ Testnachricht wurde nicht gefunden.');
         return;
       }
 
-      const channelId =
-        channel.id?._serialized ||
-        channel.id ||
-        'ID nicht gefunden';
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
 
-      const channelName =
-        channel.name ||
-        channel.title ||
-        'Jorne_L1ve';
+        console.log(`--- TREFFER ${i + 1} ---`);
+        console.log('Text:', msg.body);
+        console.log('fromMe:', msg.fromMe);
 
-      console.log('================================');
-      console.log('✅ WHATSAPP-KANAL GEFUNDEN');
-      console.log('📢 Kanalname:', channelName);
-      console.log('🆔 Kanal-ID:', channelId);
-      console.log('================================');
+        console.log(
+          'ID serialized:',
+          msg.id?._serialized || 'nicht vorhanden'
+        );
+
+        console.log(
+          'ID remote:',
+          msg.id?.remote || 'nicht vorhanden'
+        );
+
+        console.log(
+          'FROM:',
+          msg.from || 'nicht vorhanden'
+        );
+
+        console.log(
+          'TO:',
+          msg.to || 'nicht vorhanden'
+        );
+
+        const candidates = [
+          msg.id?.remote,
+          msg.from,
+          msg.to
+        ].filter(Boolean);
+
+        const newsletterId =
+          candidates.find(value =>
+            String(value).includes('@newsletter')
+          );
+
+        if (newsletterId) {
+          console.log('================================');
+          console.log('🎯 KANAL-ID GEFUNDEN:');
+          console.log(newsletterId);
+          console.log('================================');
+        }
+      }
 
     } catch (error) {
       console.error(
-        '❌ Fehler beim Abrufen des WhatsApp-Kanals:',
+        '❌ Fehler beim Suchen der Testnachricht:',
         error
       );
     }
