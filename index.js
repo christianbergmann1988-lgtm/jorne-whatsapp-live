@@ -12,6 +12,7 @@ const CLIENT_ID = 'jorne-whatsapp-live';
 const AUTH_DATA_PATH = path.resolve('./.wwebjs_auth');
 
 let testStarted = false;
+let testRunning = false;
 
 
 /*
@@ -128,11 +129,14 @@ async function runChannelUITest(
   client,
   reason
 ) {
-  if (testStarted) {
+  if (
+    testStarted ||
+    testRunning
+  ) {
     return;
   }
 
-  testStarted = true;
+  testRunning = true;
 
   console.log(
     '================================'
@@ -152,6 +156,7 @@ async function runChannelUITest(
   );
 
   try {
+
     /*
     ----------------------------------------------------------
     STATUS PRÜFEN
@@ -173,8 +178,6 @@ async function runChannelUITest(
         '❌ WhatsApp ist nicht CONNECTED.'
       );
 
-      testStarted = false;
-
       return;
     }
 
@@ -187,10 +190,22 @@ async function runChannelUITest(
         '❌ Puppeteer-Seite wurde nicht gefunden.'
       );
 
-      testStarted = false;
-
       return;
     }
+
+
+    /*
+     * Ab hier gilt der Test als wirklich gestartet.
+     */
+
+    testStarted = true;
+
+
+    /*
+     * WhatsApp noch kurz Zeit geben.
+     */
+
+    await sleep(4000);
 
 
     /*
@@ -205,79 +220,384 @@ async function runChannelUITest(
     );
 
 
-    const channelAreaOpened =
+    const channelAreaResult =
       await page.evaluate(() => {
+
+        function normalize(value) {
+          return String(
+            value || ''
+          )
+            .replace(
+              /\s+/g,
+              ' '
+            )
+            .trim()
+            .toLowerCase();
+        }
+
+
+        function isVisible(element) {
+          if (!element) {
+            return false;
+          }
+
+          const rect =
+            element.getBoundingClientRect();
+
+          const style =
+            window.getComputedStyle(
+              element
+            );
+
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+          );
+        }
+
+
+        /*
+         * 1. Direkte bekannte WhatsApp-TestID.
+         */
+
+        let target =
+          document.querySelector(
+            '[data-testid="newsletter-tab-drawer"]'
+          );
+
+
+        if (
+          target &&
+          !isVisible(target)
+        ) {
+          target = null;
+        }
+
+
+        /*
+         * Relevante klickbare Elemente sammeln.
+         */
 
         const elements =
           [
-            ...document.querySelectorAll('*')
-          ];
-
-
-        const target =
-          elements.find(element => {
-
-            const aria =
-              (
-                element.getAttribute(
-                  'aria-label'
-                ) || ''
-              )
-                .trim();
-
-
-            const text =
-              (
-                element.textContent || ''
-              )
-                .trim();
-
-
-            const testId =
-              element.getAttribute(
-                'data-testid'
-              );
-
-
-            return (
-              aria === 'Kanäle' ||
-              text === 'Kanäle' ||
-              testId ===
-                'newsletter-tab-drawer'
+            ...document.querySelectorAll(
+              [
+                'button',
+                '[role="button"]',
+                '[role="tab"]',
+                '[tabindex]',
+                '[aria-label]',
+                '[data-testid]'
+              ].join(',')
+            )
+          ]
+            .filter(
+              isVisible
             );
-          });
 
+
+        /*
+         * 2. aria-label exakt "Kanäle".
+         */
 
         if (!target) {
-          return false;
+          target =
+            elements.find(
+              element =>
+                normalize(
+                  element.getAttribute(
+                    'aria-label'
+                  )
+                ) === 'kanäle'
+            );
         }
 
+
+        /*
+         * 3. aria-label enthält "Kanäle".
+         */
+
+        if (!target) {
+          target =
+            elements.find(
+              element =>
+                normalize(
+                  element.getAttribute(
+                    'aria-label'
+                  )
+                ).includes(
+                  'kanäle'
+                )
+            );
+        }
+
+
+        /*
+         * 4. data-testid enthält newsletter-tab.
+         */
+
+        if (!target) {
+          target =
+            elements.find(
+              element => {
+
+                const testId =
+                  normalize(
+                    element.getAttribute(
+                      'data-testid'
+                    )
+                  );
+
+                return (
+                  testId ===
+                    'newsletter-tab-drawer' ||
+                  testId.includes(
+                    'newsletter-tab'
+                  )
+                );
+              }
+            );
+        }
+
+
+        /*
+         * 5. Sichtbarer Text exakt "Kanäle".
+         */
+
+        if (!target) {
+          target =
+            elements.find(
+              element => {
+
+                const text =
+                  normalize(
+                    element.textContent
+                  );
+
+                return (
+                  text === 'kanäle' ||
+                  text.startsWith(
+                    'kanäle '
+                  )
+                );
+              }
+            );
+        }
+
+
+        /*
+         * 6. Ganz breiter Fallback.
+         */
+
+        if (!target) {
+          const allVisible =
+            [
+              ...document.querySelectorAll('*')
+            ]
+              .filter(
+                isVisible
+              );
+
+          target =
+            allVisible.find(
+              element => {
+
+                const aria =
+                  normalize(
+                    element.getAttribute(
+                      'aria-label'
+                    )
+                  );
+
+                const text =
+                  normalize(
+                    element.textContent
+                  );
+
+                const testId =
+                  normalize(
+                    element.getAttribute(
+                      'data-testid'
+                    )
+                  );
+
+                return (
+                  aria === 'kanäle' ||
+                  text === 'kanäle' ||
+                  testId.includes(
+                    'newsletter-tab'
+                  )
+                );
+              }
+            );
+        }
+
+
+        /*
+         * Diagnose, falls gar nichts gefunden.
+         */
+
+        if (!target) {
+          const possible =
+            elements
+              .map(
+                element => ({
+                  tag:
+                    element.tagName,
+
+                  aria:
+                    element.getAttribute(
+                      'aria-label'
+                    ),
+
+                  testId:
+                    element.getAttribute(
+                      'data-testid'
+                    ),
+
+                  role:
+                    element.getAttribute(
+                      'role'
+                    ),
+
+                  text:
+                    (
+                      element.textContent ||
+                      ''
+                    )
+                      .trim()
+                      .slice(
+                        0,
+                        120
+                      )
+                })
+              )
+              .filter(
+                item => {
+
+                  const combined =
+                    normalize(
+                      [
+                        item.aria,
+                        item.testId,
+                        item.text
+                      ]
+                        .filter(Boolean)
+                        .join(' ')
+                    );
+
+                  return (
+                    combined.includes(
+                      'kanal'
+                    ) ||
+                    combined.includes(
+                      'newsletter'
+                    )
+                  );
+                }
+              )
+              .slice(
+                0,
+                40
+              );
+
+          return {
+            opened: false,
+            possible
+          };
+        }
+
+
+        /*
+         * Anklickbares Eltern-Element bestimmen.
+         */
 
         const clickable =
           target.closest(
             [
               'button',
               '[role="button"]',
+              '[role="tab"]',
               '[tabindex]',
-              '[data-testid="newsletter-tab-drawer"]'
+              '[data-testid]'
             ].join(',')
           ) || target;
 
 
-        clickable.click();
+        try {
+          clickable.click();
+        } catch {
+          try {
+            target.click();
+          } catch {}
+        }
 
-        return true;
+
+        return {
+          opened: true,
+
+          tag:
+            clickable.tagName,
+
+          aria:
+            clickable.getAttribute(
+              'aria-label'
+            ),
+
+          testId:
+            clickable.getAttribute(
+              'data-testid'
+            ),
+
+          role:
+            clickable.getAttribute(
+              'role'
+            ),
+
+          text:
+            (
+              clickable.textContent ||
+              ''
+            )
+              .trim()
+              .slice(
+                0,
+                120
+              )
+        };
       });
 
 
     console.log(
-      channelAreaOpened
+      '📺 Kanäle-Navigation:',
+      channelAreaResult
+    );
+
+
+    console.log(
+      channelAreaResult.opened
         ? '✅ Bereich "Kanäle" angeklickt.'
         : '⚠️ Bereich "Kanäle" nicht direkt gefunden.'
     );
 
 
-    await sleep(4000);
+    if (
+      !channelAreaResult.opened
+    ) {
+      console.log(
+        '🔎 Mögliche Kanal-Elemente:',
+        channelAreaResult.possible
+      );
+    }
+
+
+    /*
+     * Navigation laden lassen.
+     */
+
+    await sleep(5000);
 
 
     /*
@@ -292,68 +612,252 @@ async function runChannelUITest(
     );
 
 
-    const channelOpened =
+    const channelResult =
       await page.evaluate(
         channelName => {
 
-          const cells =
-            [
-              ...document.querySelectorAll(
-                '[data-testid="newsletter-tab-newsletter-cell"]'
+          function normalize(value) {
+            return String(
+              value || ''
+            )
+              .replace(
+                /\s+/g,
+                ' '
               )
-            ];
+              .trim()
+              .toLowerCase();
+          }
 
 
-          let target =
-            cells.find(element =>
-              (
-                element.textContent || ''
-              ).includes(channelName)
+          function isVisible(element) {
+            if (!element) {
+              return false;
+            }
+
+            const rect =
+              element.getBoundingClientRect();
+
+            return (
+              rect.width > 0 &&
+              rect.height > 0
+            );
+          }
+
+
+          const wanted =
+            normalize(
+              channelName
             );
 
 
           /*
-           * Fallback über sichtbaren Text.
+           * Bekannte Kanal-Zellen.
+           */
+
+          const cells =
+            [
+              ...document.querySelectorAll(
+                [
+                  '[data-testid="newsletter-tab-newsletter-cell"]',
+                  '[data-testid*="newsletter"]',
+                  '[role="listitem"]',
+                  '[role="button"]',
+                  '[tabindex]'
+                ].join(',')
+              )
+            ]
+              .filter(
+                isVisible
+              );
+
+
+          let target =
+            cells.find(
+              element =>
+                normalize(
+                  element.textContent
+                ).includes(
+                  wanted
+                )
+            );
+
+
+          /*
+           * aria-label.
            */
 
           if (!target) {
-            const elements =
-              [
-                ...document.querySelectorAll('*')
-              ];
-
-
             target =
-              elements.find(element => {
-
-                const text =
-                  (
-                    element.textContent || ''
-                  ).trim();
-
-
-                const aria =
-                  (
+              cells.find(
+                element =>
+                  normalize(
                     element.getAttribute(
                       'aria-label'
-                    ) || ''
-                  ).trim();
-
-
-                return (
-                  text === channelName ||
-                  aria === channelName ||
-                  aria ===
-                    `Kanal ${channelName}`
-                );
-              });
+                    )
+                  ).includes(
+                    wanted
+                  )
+              );
           }
 
+
+          /*
+           * Gesamtes sichtbares DOM,
+           * aber nur exakte kurze Treffer.
+           */
 
           if (!target) {
-            return false;
+            const allVisible =
+              [
+                ...document.querySelectorAll('*')
+              ]
+                .filter(
+                  isVisible
+                );
+
+            target =
+              allVisible.find(
+                element => {
+
+                  const text =
+                    normalize(
+                      element.textContent
+                    );
+
+                  const aria =
+                    normalize(
+                      element.getAttribute(
+                        'aria-label'
+                      )
+                    );
+
+                  return (
+                    text === wanted ||
+                    aria === wanted ||
+                    aria ===
+                      `kanal ${wanted}`
+                  );
+                }
+              );
           }
 
+
+          /*
+           * Noch breiter:
+           * Element enthält Jorne_L1ve,
+           * darf aber kein riesiger Container sein.
+           */
+
+          if (!target) {
+            const allVisible =
+              [
+                ...document.querySelectorAll('*')
+              ]
+                .filter(
+                  isVisible
+                );
+
+            target =
+              allVisible.find(
+                element => {
+
+                  const text =
+                    normalize(
+                      element.textContent
+                    );
+
+                  return (
+                    text.includes(
+                      wanted
+                    ) &&
+                    text.length < 250
+                  );
+                }
+              );
+          }
+
+
+          /*
+           * Diagnose.
+           */
+
+          if (!target) {
+            const possible =
+              cells
+                .map(
+                  element => ({
+                    tag:
+                      element.tagName,
+
+                    aria:
+                      element.getAttribute(
+                        'aria-label'
+                      ),
+
+                    testId:
+                      element.getAttribute(
+                        'data-testid'
+                      ),
+
+                    role:
+                      element.getAttribute(
+                        'role'
+                      ),
+
+                    text:
+                      (
+                        element.textContent ||
+                        ''
+                      )
+                        .trim()
+                        .slice(
+                          0,
+                          160
+                        )
+                  })
+                )
+                .filter(
+                  item => {
+
+                    const combined =
+                      normalize(
+                        [
+                          item.aria,
+                          item.testId,
+                          item.text
+                        ]
+                          .filter(Boolean)
+                          .join(' ')
+                      );
+
+                    return (
+                      combined.includes(
+                        'jorne'
+                      ) ||
+                      combined.includes(
+                        'newsletter'
+                      ) ||
+                      combined.includes(
+                        'kanal'
+                      )
+                    );
+                  }
+                )
+                .slice(
+                  0,
+                  50
+                );
+
+            return {
+              opened: false,
+              possible
+            };
+          }
+
+
+          /*
+           * Hoch zum anklickbaren Container.
+           */
 
           const clickable =
             target.closest(
@@ -367,19 +871,77 @@ async function runChannelUITest(
             ) || target;
 
 
-          clickable.click();
+          try {
+            clickable.click();
+          } catch {
+            try {
+              target.click();
+            } catch {}
+          }
 
-          return true;
+
+          return {
+            opened: true,
+
+            tag:
+              clickable.tagName,
+
+            aria:
+              clickable.getAttribute(
+                'aria-label'
+              ),
+
+            testId:
+              clickable.getAttribute(
+                'data-testid'
+              ),
+
+            role:
+              clickable.getAttribute(
+                'role'
+              ),
+
+            text:
+              (
+                clickable.textContent ||
+                ''
+              )
+                .trim()
+                .slice(
+                  0,
+                  160
+                )
+          };
         },
 
         CHANNEL_NAME
       );
 
 
-    if (!channelOpened) {
+    console.log(
+      '📺 Kanal-Suche:',
+      channelResult
+    );
+
+
+    if (
+      !channelResult.opened
+    ) {
       console.log(
         `❌ Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`
       );
+
+      console.log(
+        '🔎 Mögliche Kanal-Zellen:',
+        channelResult.possible
+      );
+
+      /*
+       * Ganz wichtig:
+       * Späteren neuen Versuch erlauben.
+       */
+
+      testStarted = false;
 
       return;
     }
@@ -391,8 +953,7 @@ async function runChannelUITest(
 
 
     /*
-     * Dem Kanal etwas mehr Zeit geben,
-     * seine komplette Oberfläche zu laden.
+     * Kanal vollständig laden.
      */
 
     await sleep(8000);
@@ -425,12 +986,10 @@ async function runChannelUITest(
           const html =
             document.documentElement.innerHTML;
 
-
           const matches =
             html.match(
               /[0-9]{5,40}@newsletter/g
             ) || [];
-
 
           for (
             const id
@@ -438,6 +997,7 @@ async function runChannelUITest(
           ) {
             ids.add(id);
           }
+
         } catch {}
 
 
@@ -452,7 +1012,6 @@ async function runChannelUITest(
             window.Store?.NewsletterStore
           ];
 
-
           for (
             const store
             of possibleStores
@@ -460,13 +1019,11 @@ async function runChannelUITest(
             const models =
               store?.models || [];
 
-
             for (
               const model
               of models
             ) {
               let id = null;
-
 
               try {
                 id =
@@ -474,7 +1031,6 @@ async function runChannelUITest(
                   model?.id?.toString?.() ||
                   null;
               } catch {}
-
 
               if (
                 id &&
@@ -488,6 +1044,7 @@ async function runChannelUITest(
               }
             }
           }
+
         } catch {}
 
 
@@ -505,10 +1062,6 @@ async function runChannelUITest(
     ----------------------------------------------------------
     SCHRITT 4:
     EINGABEFELD SUCHEN
-
-    WICHTIG:
-    Wir suchen diesmal deutlich breiter und
-    schließen die linken Suchfelder gezielt aus.
     ----------------------------------------------------------
     */
 
@@ -520,24 +1073,16 @@ async function runChannelUITest(
     const composerInfo =
       await page.evaluate(() => {
 
-        /*
-         * Prüft, ob ein Element tatsächlich
-         * sichtbar ist.
-         */
-
         function isVisible(element) {
           if (!element) {
             return false;
           }
 
-
           const rect =
             element.getBoundingClientRect();
 
-
           const style =
             window.getComputedStyle(element);
-
 
           return (
             rect.width > 0 &&
@@ -549,14 +1094,9 @@ async function runChannelUITest(
         }
 
 
-        /*
-         * Textwerte eines Elements normalisieren.
-         */
-
         function getInfo(element) {
           const rect =
             element.getBoundingClientRect();
-
 
           return {
             tag:
@@ -588,6 +1128,16 @@ async function runChannelUITest(
             testId:
               element.getAttribute(
                 'data-testid'
+              ),
+
+            dataTab:
+              element.getAttribute(
+                'data-tab'
+              ),
+
+            lexical:
+              element.getAttribute(
+                'data-lexical-editor'
               ),
 
             left:
@@ -634,13 +1184,6 @@ async function runChannelUITest(
         }
 
 
-        /*
-         * Kandidaten sammeln.
-         *
-         * Nicht nur input / textarea,
-         * sondern auch WhatsApps editierbare DIVs.
-         */
-
         const selectors = [
           '[contenteditable="true"]',
           '[role="textbox"]',
@@ -650,7 +1193,11 @@ async function runChannelUITest(
           '[data-tab]',
           '[data-testid*="compose"]',
           '[data-testid*="input"]',
-          '[data-testid*="newsletter"]'
+          '[data-testid*="newsletter"]',
+          '[aria-label*="Meldung"]',
+          '[aria-label*="Nachricht"]',
+          '[placeholder*="Meldung"]',
+          '[data-placeholder*="Meldung"]'
         ];
 
 
@@ -663,10 +1210,6 @@ async function runChannelUITest(
             .filter(isVisible);
 
 
-        /*
-         * Doppelte Elemente entfernen.
-         */
-
         const candidates =
           [
             ...new Set(
@@ -676,9 +1219,7 @@ async function runChannelUITest(
 
 
         /*
-         * 1.
-         * Explizit nach Texten wie
-         * "Meldung verfassen" suchen.
+         * 1. Direkte Meldungsbezeichnungen.
          */
 
         let target =
@@ -692,7 +1233,6 @@ async function runChannelUITest(
               )
                 .toLowerCase();
 
-
             const placeholder =
               (
                 element.getAttribute(
@@ -705,7 +1245,6 @@ async function runChannelUITest(
               )
                 .toLowerCase();
 
-
             const text =
               (
                 element.textContent ||
@@ -714,8 +1253,10 @@ async function runChannelUITest(
                 .trim()
                 .toLowerCase();
 
-
             return (
+              aria.includes(
+                'gib eine meldung ein'
+              ) ||
               aria.includes(
                 'meldung verfassen'
               ) ||
@@ -724,6 +1265,9 @@ async function runChannelUITest(
               ) ||
               aria.includes(
                 'nachricht eingeben'
+              ) ||
+              placeholder.includes(
+                'gib eine meldung ein'
               ) ||
               placeholder.includes(
                 'meldung verfassen'
@@ -735,16 +1279,16 @@ async function runChannelUITest(
                 'nachricht eingeben'
               ) ||
               text ===
+                'gib eine meldung ein' ||
+              text ===
                 'meldung verfassen'
             );
           });
 
 
         /*
-         * 2.
-         * Falls wir einen äußeren Container
-         * erwischt haben, darin das echte
-         * editierbare Element suchen.
+         * Falls äußerer Container:
+         * echtes Feld darin verwenden.
          */
 
         if (target) {
@@ -759,7 +1303,6 @@ async function runChannelUITest(
               ].join(',')
             );
 
-
           if (
             inner &&
             isVisible(inner)
@@ -770,49 +1313,24 @@ async function runChannelUITest(
 
 
         /*
-         * 3.
-         * Editierbare Elemente im Hauptbereich
-         * von WhatsApp bevorzugen.
-         *
-         * Linke Suchfelder befinden sich typischerweise
-         * weit links. Der Kanal selbst befindet sich
-         * im Hauptbereich.
+         * 2. Hauptbereich + untere Hälfte.
          */
 
         if (!target) {
           const editable =
             candidates.filter(element => {
 
-              const editableValue =
-                element.getAttribute(
-                  'contenteditable'
-                );
-
-
-              const role =
-                element.getAttribute(
-                  'role'
-                );
-
-
-              const lexical =
-                element.getAttribute(
-                  'data-lexical-editor'
-                );
-
-
-              const tag =
-                element.tagName;
-
+              const info =
+                getInfo(element);
 
               return (
-                editableValue ===
+                info.contenteditable ===
                   'true' ||
-                role ===
+                info.role ===
                   'textbox' ||
-                lexical ===
+                info.lexical ===
                   'true' ||
-                tag ===
+                info.tag ===
                   'TEXTAREA'
               );
             });
@@ -824,22 +1342,15 @@ async function runChannelUITest(
               const info =
                 getInfo(element);
 
-
               const aria =
                 (
                   info.aria || ''
                 ).toLowerCase();
 
-
               const placeholder =
                 (
                   info.placeholder || ''
                 ).toLowerCase();
-
-
-              /*
-               * Suchfelder ausdrücklich ausschließen.
-               */
 
               const isSearch =
                 aria.includes(
@@ -849,28 +1360,15 @@ async function runChannelUITest(
                   'suchen'
                 );
 
-
-              /*
-               * Das Eingabefeld sollte nicht ganz links
-               * liegen.
-               */
-
               const isMainArea =
                 info.left >
                 window.innerWidth *
                   0.28;
 
-
-              /*
-               * Meist befindet sich der Composer
-               * eher im unteren Bildschirmbereich.
-               */
-
               const isLowerArea =
                 info.top >
                 window.innerHeight *
-                  0.45;
-
+                  0.40;
 
               return (
                 !isSearch &&
@@ -882,11 +1380,7 @@ async function runChannelUITest(
 
 
         /*
-         * 4.
-         * Falls weiterhin nichts gefunden:
-         * Suche nach einem editierbaren Element,
-         * auch wenn WhatsApp den Composer weiter
-         * oben positioniert.
+         * 3. Hauptbereich ohne Höhenbedingung.
          */
 
         if (!target) {
@@ -896,27 +1390,25 @@ async function runChannelUITest(
               const info =
                 getInfo(element);
 
-
               const aria =
                 (
                   info.aria || ''
                 ).toLowerCase();
-
 
               const placeholder =
                 (
                   info.placeholder || ''
                 ).toLowerCase();
 
-
               const editable =
                 info.contenteditable ===
                   'true' ||
                 info.role ===
                   'textbox' ||
-                element.tagName ===
+                info.lexical ===
+                  'true' ||
+                info.tag ===
                   'TEXTAREA';
-
 
               const search =
                 aria.includes(
@@ -925,7 +1417,6 @@ async function runChannelUITest(
                 placeholder.includes(
                   'suchen'
                 );
-
 
               return (
                 editable &&
@@ -939,8 +1430,7 @@ async function runChannelUITest(
 
 
         /*
-         * Vollständige Diagnose der
-         * interessanten sichtbaren Elemente.
+         * Diagnose.
          */
 
         const diagnosticSelectors = [
@@ -952,6 +1442,7 @@ async function runChannelUITest(
           '[placeholder]',
           '[data-placeholder]',
           '[data-testid]',
+          '[data-tab]',
           '[data-lexical-editor]'
         ];
 
@@ -989,12 +1480,13 @@ async function runChannelUITest(
                   item.role,
                   item.contenteditable,
                   item.testId,
+                  item.dataTab,
+                  item.lexical,
                   item.text
                 ]
                   .filter(Boolean)
                   .join(' ')
                   .toLowerCase();
-
 
               return (
                 joined.includes(
@@ -1022,7 +1514,7 @@ async function runChannelUITest(
             })
             .slice(
               0,
-              80
+              100
             );
 
 
@@ -1042,12 +1534,6 @@ async function runChannelUITest(
           };
         }
 
-
-        /*
-         * Marker setzen, damit Puppeteer
-         * das Element außerhalb von evaluate()
-         * wiederfindet.
-         */
 
         target.setAttribute(
           'data-bot-composer',
@@ -1091,6 +1577,12 @@ async function runChannelUITest(
         '➡️ Bitte Screenshot vom kompletten Abschnitt "Composer-Diagnose" schicken.'
       );
 
+      /*
+       * Späteren Versuch zulassen.
+       */
+
+      testStarted = false;
+
       return;
     }
 
@@ -1124,6 +1616,8 @@ async function runChannelUITest(
         '❌ Das markierte Meldungsfeld konnte nicht erneut gefunden werden.'
       );
 
+      testStarted = false;
+
       return;
     }
 
@@ -1133,11 +1627,6 @@ async function runChannelUITest(
 
     await sleep(500);
 
-
-    /*
-     * Eventuell vorhandenen Text nicht löschen,
-     * sondern nur eintippen.
-     */
 
     await page.keyboard.type(
       TEST_MESSAGE,
@@ -1174,11 +1663,6 @@ async function runChannelUITest(
 
     await sleep(4000);
 
-
-    /*
-     * Nach dem Senden prüfen,
-     * ob der Text sichtbar ist.
-     */
 
     const messageVisible =
       await page.evaluate(
@@ -1238,6 +1722,15 @@ async function runChannelUITest(
     console.log(
       '================================'
     );
+
+    /*
+     * Bei technischem Fehler erneuten Versuch zulassen.
+     */
+
+    testStarted = false;
+
+  } finally {
+    testRunning = false;
   }
 }
 
@@ -1251,8 +1744,7 @@ BOT START
 async function startBot() {
 
   /*
-   * Lokalen RemoteAuth-Ordner auf jedem
-   * frischen GitHub-Runner anlegen.
+   * Lokalen RemoteAuth-Ordner anlegen.
    */
 
   fs.mkdirSync(
@@ -1302,8 +1794,7 @@ async function startBot() {
 
 
   /*
-   * Prüfen, ob eine gespeicherte
-   * RemoteAuth-Sitzung existiert.
+   * Gespeicherte Sitzung prüfen.
    */
 
   try {
@@ -1328,7 +1819,7 @@ async function startBot() {
 
 
   /*
-   * WhatsApp Client erstellen.
+   * WhatsApp Client.
    */
 
   const client =
@@ -1434,18 +1925,8 @@ async function startBot() {
       );
 
 
-      /*
-       * WhatsApp nach READY noch kurz
-       * fertig laden lassen.
-       */
-
       await sleep(7000);
 
-
-      /*
-       * READY kann bei WhatsApp bereits kommen,
-       * bevor getState() CONNECTED meldet.
-       */
 
       try {
         const state =
@@ -1459,8 +1940,7 @@ async function startBot() {
 
 
         if (
-          state ===
-          'CONNECTED'
+          state === 'CONNECTED'
         ) {
           await runChannelUITest(
             client,
@@ -1472,11 +1952,6 @@ async function startBot() {
 
       } catch {}
 
-
-      /*
-       * Falls noch nicht CONNECTED:
-       * kurze Zeit später erneut versuchen.
-       */
 
       await sleep(7000);
 
@@ -1493,8 +1968,7 @@ async function startBot() {
 
 
         if (
-          state ===
-          'CONNECTED'
+          state === 'CONNECTED'
         ) {
           await runChannelUITest(
             client,
@@ -1522,22 +1996,25 @@ async function startBot() {
       );
 
 
-      /*
-       * Sicherheitsnetz:
-       * Falls READY zu früh kam und CONNECTED
-       * später folgt.
-       */
-
       if (
-        state ===
-          'CONNECTED' &&
-        !testStarted
+        state === 'CONNECTED' &&
+        !testStarted &&
+        !testRunning
       ) {
         setTimeout(
           () => {
+
             runChannelUITest(
               client,
               'change_state = CONNECTED'
+            ).catch(
+              error => {
+
+                console.error(
+                  '❌ CONNECTED-Test fehlgeschlagen:',
+                  error
+                );
+              }
             );
           },
 
@@ -1592,7 +2069,10 @@ async function startBot() {
   setTimeout(
     async () => {
 
-      if (testStarted) {
+      if (
+        testStarted ||
+        testRunning
+      ) {
         return;
       }
 
@@ -1609,8 +2089,7 @@ async function startBot() {
 
 
         if (
-          state ===
-          'CONNECTED'
+          state === 'CONNECTED'
         ) {
           await runChannelUITest(
             client,
