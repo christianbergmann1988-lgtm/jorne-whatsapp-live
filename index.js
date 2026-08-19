@@ -18,12 +18,6 @@ async function startBot() {
       backupSyncIntervalMs: 60000
     }),
 
-    pairWithPhoneNumber: {
-      phoneNumber: process.env.WHATSAPP_PHONE,
-      showNotification: true,
-      intervalMs: 180000
-    },
-
     puppeteer: {
       headless: true,
       args: [
@@ -34,19 +28,19 @@ async function startBot() {
     }
   });
 
-  client.on('code', (code) => {
-    console.log('================================');
-    console.log('WHATSAPP KOPPLUNGSCODE:');
-    console.log(code);
-    console.log('================================');
-  });
-
   client.on('authenticated', () => {
     console.log('✅ WhatsApp erfolgreich angemeldet.');
   });
 
-  client.on('ready', () => {
+  client.on('ready', async () => {
     console.log('✅ WhatsApp-Bot ist bereit.');
+
+    try {
+      const version = await client.getWWebVersion();
+      console.log('📦 WhatsApp-Web-Version:', version);
+    } catch (err) {
+      console.log('⚠️ WhatsApp-Web-Version konnte nicht gelesen werden:', err.message);
+    }
   });
 
   client.on('remote_session_saved', () => {
@@ -61,9 +55,34 @@ async function startBot() {
     console.log('⚠️ WhatsApp getrennt:', reason);
   });
 
-  console.log('Starte WhatsApp mit Telefonnummer-Kopplung...');
+  console.log('Starte WhatsApp...');
 
-  await client.initialize();
+  // Wichtig: nicht darauf warten, sonst kommen wir vor der Anmeldung
+  // nicht an den Pairing-Schritt.
+  client.initialize();
+
+  // WhatsApp Web Zeit zum Laden geben
+  await new Promise(resolve => setTimeout(resolve, 15000));
+
+  try {
+    const version = await client.getWWebVersion();
+    console.log('📦 Geladene WhatsApp-Web-Version:', version);
+  } catch (err) {
+    console.log('⚠️ Version vor Anmeldung nicht lesbar:', err.message);
+  }
+
+  console.log('📱 Fordere Kopplungscode an...');
+
+  const code = await client.requestPairingCode(
+    process.env.WHATSAPP_PHONE,
+    true,
+    180000
+  );
+
+  console.log('================================');
+  console.log('WHATSAPP KOPPLUNGSCODE:');
+  console.log(code);
+  console.log('================================');
 }
 
 startBot().catch((error) => {
