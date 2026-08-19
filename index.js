@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
+const WEB_VERSION = '2.3000.1031490220-alpha';
+
 async function startBot() {
   console.log('Verbinde mit MongoDB...');
 
@@ -11,12 +13,26 @@ async function startBot() {
   const store = new MongoStore({ mongoose });
 
   const client = new Client({
+    webVersion: WEB_VERSION,
+
+    webVersionCache: {
+      type: 'remote',
+      remotePath:
+        'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1031490220-alpha.html'
+    },
+
     authStrategy: new RemoteAuth({
       clientId: 'jorne-whatsapp-live',
       store,
       dataPath: '.',
       backupSyncIntervalMs: 60000
     }),
+
+    pairWithPhoneNumber: {
+      phoneNumber: process.env.WHATSAPP_PHONE,
+      showNotification: true,
+      intervalMs: 180000
+    },
 
     puppeteer: {
       headless: true,
@@ -28,6 +44,13 @@ async function startBot() {
     }
   });
 
+  client.on('code', (code) => {
+    console.log('================================');
+    console.log('📱 WHATSAPP KOPPLUNGSCODE:');
+    console.log(code);
+    console.log('================================');
+  });
+
   client.on('authenticated', () => {
     console.log('✅ WhatsApp erfolgreich angemeldet.');
   });
@@ -37,9 +60,9 @@ async function startBot() {
 
     try {
       const version = await client.getWWebVersion();
-      console.log('📦 WhatsApp-Web-Version:', version);
-    } catch (err) {
-      console.log('⚠️ WhatsApp-Web-Version konnte nicht gelesen werden:', err.message);
+      console.log('📦 Tatsächlich verwendete WhatsApp-Web-Version:', version);
+    } catch (error) {
+      console.log('⚠️ Web-Version konnte nicht gelesen werden.');
     }
   });
 
@@ -55,34 +78,11 @@ async function startBot() {
     console.log('⚠️ WhatsApp getrennt:', reason);
   });
 
-  console.log('Starte WhatsApp...');
-
-  // Wichtig: nicht darauf warten, sonst kommen wir vor der Anmeldung
-  // nicht an den Pairing-Schritt.
-  client.initialize();
-
-  // WhatsApp Web Zeit zum Laden geben
-  await new Promise(resolve => setTimeout(resolve, 15000));
-
-  try {
-    const version = await client.getWWebVersion();
-    console.log('📦 Geladene WhatsApp-Web-Version:', version);
-  } catch (err) {
-    console.log('⚠️ Version vor Anmeldung nicht lesbar:', err.message);
-  }
-
-  console.log('📱 Fordere Kopplungscode an...');
-
-  const code = await client.requestPairingCode(
-    process.env.WHATSAPP_PHONE,
-    true,
-    180000
+  console.log(
+    `Starte WhatsApp mit festgelegter Web-Version ${WEB_VERSION}...`
   );
 
-  console.log('================================');
-  console.log('WHATSAPP KOPPLUNGSCODE:');
-  console.log(code);
-  console.log('================================');
+  await client.initialize();
 }
 
 startBot().catch((error) => {
