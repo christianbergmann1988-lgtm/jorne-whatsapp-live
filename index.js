@@ -3,7 +3,13 @@ const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
 const WEB_VERSION = '2.3000.1031490220-alpha';
-const TEST_TEXT = 'BOT-TEST 12345';
+
+const CHANNEL_NAME = 'Jorne_L1ve';
+const TEST_MESSAGE = 'BOT-TEST AUTOMATISCH';
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function startBot() {
   console.log('Verbinde mit MongoDB...');
@@ -56,89 +62,6 @@ async function startBot() {
     console.log('✅ WhatsApp erfolgreich angemeldet.');
   });
 
-  client.on('ready', async () => {
-    console.log('✅ WhatsApp-Bot ist bereit.');
-
-    try {
-      const version = await client.getWWebVersion();
-      console.log(
-        '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
-        version
-      );
-    } catch (error) {
-      console.log('⚠️ Web-Version konnte nicht gelesen werden.');
-    }
-
-    console.log(`🔎 Suche Testnachricht: "${TEST_TEXT}"`);
-
-    try {
-      const messages = await client.searchMessages(TEST_TEXT, {
-        limit: 20
-      });
-
-      console.log('================================');
-      console.log(`🔎 Gefundene Nachrichten: ${messages.length}`);
-      console.log('================================');
-
-      if (messages.length === 0) {
-        console.log('❌ Testnachricht wurde nicht gefunden.');
-        return;
-      }
-
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i];
-
-        console.log(`--- TREFFER ${i + 1} ---`);
-        console.log('Text:', msg.body);
-        console.log('fromMe:', msg.fromMe);
-
-        console.log(
-          'ID serialized:',
-          msg.id?._serialized || 'nicht vorhanden'
-        );
-
-        console.log(
-          'ID remote:',
-          msg.id?.remote || 'nicht vorhanden'
-        );
-
-        console.log(
-          'FROM:',
-          msg.from || 'nicht vorhanden'
-        );
-
-        console.log(
-          'TO:',
-          msg.to || 'nicht vorhanden'
-        );
-
-        const candidates = [
-          msg.id?.remote,
-          msg.from,
-          msg.to
-        ].filter(Boolean);
-
-        const newsletterId =
-          candidates.find(value =>
-            String(value).includes('@newsletter')
-          );
-
-        if (newsletterId) {
-          console.log('================================');
-          console.log('🎯 KANAL-ID GEFUNDEN:');
-          console.log(newsletterId);
-          console.log('================================');
-        }
-      }
-
-    } catch (error) {
-      console.error(
-        '❌ Fehler beim Suchen der Testnachricht:',
-        error
-      );
-    }
-  });
-
   client.on('remote_session_saved', () => {
     console.log(
       '💾 WhatsApp-Sitzung wurde in MongoDB gespeichert.'
@@ -157,6 +80,293 @@ async function startBot() {
       '⚠️ WhatsApp getrennt:',
       reason
     );
+  });
+
+  client.on('ready', async () => {
+    console.log('✅ WhatsApp-Bot ist bereit.');
+
+    try {
+      const version = await client.getWWebVersion();
+
+      console.log(
+        '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
+        version
+      );
+    } catch (error) {
+      console.log(
+        '⚠️ WhatsApp-Web-Version konnte nicht gelesen werden.'
+      );
+    }
+
+    const page = client.pupPage;
+
+    if (!page) {
+      console.error(
+        '❌ Puppeteer-Seite wurde nicht gefunden.'
+      );
+      return;
+    }
+
+    console.log('🌐 WhatsApp-Web-Oberfläche wird geprüft...');
+
+    await sleep(5000);
+
+    /*
+     * SCHRITT 1:
+     * Versuchen, den Bereich "Kanäle" zu öffnen.
+     */
+    console.log('🔎 Suche den Bereich "Kanäle"...');
+
+    const channelsOpened = await page.evaluate(() => {
+      const elements = [...document.querySelectorAll('*')];
+
+      const candidate = elements.find(el => {
+        const text = el.textContent?.trim();
+        const aria = el.getAttribute('aria-label')?.trim();
+
+        return (
+          text === 'Kanäle' ||
+          aria === 'Kanäle' ||
+          aria?.includes('Kanäle')
+        );
+      });
+
+      if (!candidate) {
+        return false;
+      }
+
+      const clickable =
+        candidate.closest(
+          'button,[role="button"],[tabindex]'
+        ) || candidate;
+
+      clickable.click();
+
+      return true;
+    });
+
+    if (channelsOpened) {
+      console.log('✅ Bereich "Kanäle" angeklickt.');
+    } else {
+      console.log(
+        '⚠️ Schaltfläche "Kanäle" wurde nicht gefunden.'
+      );
+      console.log(
+        '➡️ Suche den Kanal trotzdem direkt in der Oberfläche.'
+      );
+    }
+
+    await sleep(5000);
+
+    /*
+     * SCHRITT 2:
+     * Jorne_L1ve über sichtbaren Text bzw. aria-label finden.
+     */
+    console.log(
+      `🔎 Suche WhatsApp-Kanal "${CHANNEL_NAME}"...`
+    );
+
+    const channelOpened = await page.evaluate(
+      (channelName) => {
+        const elements = [
+          ...document.querySelectorAll('*')
+        ];
+
+        const candidate = elements.find(el => {
+          const text = el.textContent?.trim();
+          const aria = el.getAttribute('aria-label')?.trim();
+
+          return (
+            text === channelName ||
+            aria === `Kanal ${channelName}` ||
+            aria?.includes(`Kanal ${channelName}`)
+          );
+        });
+
+        if (!candidate) {
+          return false;
+        }
+
+        const clickable =
+          candidate.closest(
+            'button,[role="button"],[role="listitem"],[tabindex]'
+          ) || candidate;
+
+        clickable.click();
+
+        return true;
+      },
+      CHANNEL_NAME
+    );
+
+    if (!channelOpened) {
+      console.error(
+        `❌ Kanal "${CHANNEL_NAME}" wurde in der WhatsApp-Web-Oberfläche nicht gefunden.`
+      );
+
+      const diagnostics = await page.evaluate(() => {
+        return [...document.querySelectorAll('[aria-label]')]
+          .map(el => el.getAttribute('aria-label'))
+          .filter(Boolean)
+          .filter(value =>
+            value.toLowerCase().includes('kanal')
+          )
+          .slice(0, 30);
+      });
+
+      console.log(
+        '🔍 Gefundene Kanal-Aria-Labels:',
+        diagnostics
+      );
+
+      return;
+    }
+
+    console.log(
+      `✅ Kanal "${CHANNEL_NAME}" wurde geöffnet.`
+    );
+
+    await sleep(5000);
+
+    /*
+     * SCHRITT 3:
+     * Eingabefeld des geöffneten Kanals suchen.
+     */
+    console.log(
+      '🔎 Suche das Eingabefeld für eine Kanalmeldung...'
+    );
+
+    const editorFound = await page.evaluate(() => {
+      const editors = [
+        ...document.querySelectorAll(
+          '[contenteditable="true"]'
+        )
+      ];
+
+      const editor = editors.find(el => {
+        const aria =
+          el.getAttribute('aria-label') || '';
+
+        const placeholder =
+          el.getAttribute('data-placeholder') || '';
+
+        const text =
+          `${aria} ${placeholder}`.toLowerCase();
+
+        return (
+          text.includes('meldung') ||
+          text.includes('message')
+        );
+      }) || editors.at(-1);
+
+      if (!editor) {
+        return false;
+      }
+
+      editor.setAttribute(
+        'data-bot-target',
+        'channel-editor'
+      );
+
+      editor.focus();
+
+      return true;
+    });
+
+    if (!editorFound) {
+      console.error(
+        '❌ Eingabefeld des Kanals wurde nicht gefunden.'
+      );
+
+      const editorDiagnostics =
+        await page.evaluate(() => {
+          return [
+            ...document.querySelectorAll(
+              '[contenteditable="true"]'
+            )
+          ].map(el => ({
+            aria:
+              el.getAttribute('aria-label'),
+            placeholder:
+              el.getAttribute(
+                'data-placeholder'
+              )
+          }));
+        });
+
+      console.log(
+        '🔍 Gefundene Eingabefelder:',
+        editorDiagnostics
+      );
+
+      return;
+    }
+
+    console.log('✅ Eingabefeld gefunden.');
+
+    /*
+     * SCHRITT 4:
+     * Testnachricht schreiben.
+     */
+    const selector =
+      '[data-bot-target="channel-editor"]';
+
+    await page.click(selector);
+
+    await page.keyboard.type(
+      TEST_MESSAGE,
+      { delay: 50 }
+    );
+
+    await sleep(1000);
+
+    console.log(
+      `✍️ Testtext eingetragen: "${TEST_MESSAGE}"`
+    );
+
+    /*
+     * SCHRITT 5:
+     * Enter drücken und damit posten.
+     */
+    await page.keyboard.press('Enter');
+
+    console.log('📤 Enter gedrückt.');
+
+    await sleep(5000);
+
+    /*
+     * SCHRITT 6:
+     * Prüfen, ob die Meldung anschließend sichtbar ist.
+     */
+    const messageVisible = await page.evaluate(
+      (testMessage) => {
+        return [
+          ...document.querySelectorAll('*')
+        ].some(
+          el =>
+            el.textContent?.trim() ===
+            testMessage
+        );
+      },
+      TEST_MESSAGE
+    );
+
+    console.log('================================');
+
+    if (messageVisible) {
+      console.log(
+        '🎉 TEST ERFOLGREICH!'
+      );
+      console.log(
+        `✅ "${TEST_MESSAGE}" ist im Kanal sichtbar.`
+      );
+    } else {
+      console.log(
+        '⚠️ Enter wurde ausgeführt, aber die Testmeldung konnte anschließend nicht eindeutig im DOM bestätigt werden.'
+      );
+    }
+
+    console.log('================================');
   });
 
   console.log(
