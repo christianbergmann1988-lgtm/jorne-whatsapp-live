@@ -3,9 +3,7 @@ const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
 const WEB_VERSION = '2.3000.1031490220-alpha';
-
 const CHANNEL_NAME = 'Jorne_L1ve';
-const TEST_MESSAGE = 'BOT-TEST AUTOMATISCH';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -63,23 +61,15 @@ async function startBot() {
   });
 
   client.on('remote_session_saved', () => {
-    console.log(
-      '💾 WhatsApp-Sitzung wurde in MongoDB gespeichert.'
-    );
+    console.log('💾 WhatsApp-Sitzung wurde in MongoDB gespeichert.');
   });
 
   client.on('auth_failure', (msg) => {
-    console.error(
-      '❌ WhatsApp-Anmeldung fehlgeschlagen:',
-      msg
-    );
+    console.error('❌ WhatsApp-Anmeldung fehlgeschlagen:', msg);
   });
 
   client.on('disconnected', (reason) => {
-    console.log(
-      '⚠️ WhatsApp getrennt:',
-      reason
-    );
+    console.log('⚠️ WhatsApp getrennt:', reason);
   });
 
   client.on('ready', async () => {
@@ -87,35 +77,24 @@ async function startBot() {
 
     try {
       const version = await client.getWWebVersion();
-
       console.log(
         '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
         version
       );
-    } catch (error) {
-      console.log(
-        '⚠️ WhatsApp-Web-Version konnte nicht gelesen werden.'
-      );
+    } catch {
+      console.log('⚠️ Web-Version konnte nicht gelesen werden.');
     }
 
     const page = client.pupPage;
 
     if (!page) {
-      console.error(
-        '❌ Puppeteer-Seite wurde nicht gefunden.'
-      );
+      console.error('❌ Puppeteer-Seite wurde nicht gefunden.');
       return;
     }
 
-    console.log('🌐 WhatsApp-Web-Oberfläche wird geprüft...');
-
     await sleep(5000);
 
-    /*
-     * SCHRITT 1:
-     * Versuchen, den Bereich "Kanäle" zu öffnen.
-     */
-    console.log('🔎 Suche den Bereich "Kanäle"...');
+    console.log('🔎 Suche Bereich "Kanäle"...');
 
     const channelsOpened = await page.evaluate(() => {
       const elements = [...document.querySelectorAll('*')];
@@ -141,36 +120,22 @@ async function startBot() {
         ) || candidate;
 
       clickable.click();
-
       return true;
     });
 
-    if (channelsOpened) {
-      console.log('✅ Bereich "Kanäle" angeklickt.');
-    } else {
-      console.log(
-        '⚠️ Schaltfläche "Kanäle" wurde nicht gefunden.'
-      );
-      console.log(
-        '➡️ Suche den Kanal trotzdem direkt in der Oberfläche.'
-      );
-    }
+    console.log(
+      channelsOpened
+        ? '✅ Bereich "Kanäle" angeklickt.'
+        : '⚠️ Bereich "Kanäle" wurde nicht gefunden.'
+    );
 
     await sleep(5000);
 
-    /*
-     * SCHRITT 2:
-     * Jorne_L1ve über sichtbaren Text bzw. aria-label finden.
-     */
-    console.log(
-      `🔎 Suche WhatsApp-Kanal "${CHANNEL_NAME}"...`
-    );
+    console.log(`🔎 Suche Kanal "${CHANNEL_NAME}"...`);
 
     const channelOpened = await page.evaluate(
       (channelName) => {
-        const elements = [
-          ...document.querySelectorAll('*')
-        ];
+        const elements = [...document.querySelectorAll('*')];
 
         const candidate = elements.find(el => {
           const text = el.textContent?.trim();
@@ -193,179 +158,98 @@ async function startBot() {
           ) || candidate;
 
         clickable.click();
-
         return true;
       },
       CHANNEL_NAME
     );
 
     if (!channelOpened) {
-      console.error(
-        `❌ Kanal "${CHANNEL_NAME}" wurde in der WhatsApp-Web-Oberfläche nicht gefunden.`
-      );
-
-      const diagnostics = await page.evaluate(() => {
-        return [...document.querySelectorAll('[aria-label]')]
-          .map(el => el.getAttribute('aria-label'))
-          .filter(Boolean)
-          .filter(value =>
-            value.toLowerCase().includes('kanal')
-          )
-          .slice(0, 30);
-      });
-
-      console.log(
-        '🔍 Gefundene Kanal-Aria-Labels:',
-        diagnostics
-      );
-
+      console.error(`❌ Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`);
       return;
     }
 
-    console.log(
-      `✅ Kanal "${CHANNEL_NAME}" wurde geöffnet.`
-    );
+    console.log(`✅ Kanal "${CHANNEL_NAME}" wurde geöffnet.`);
 
-    await sleep(5000);
+    await sleep(7000);
 
-    /*
-     * SCHRITT 3:
-     * Eingabefeld des geöffneten Kanals suchen.
-     */
-    console.log(
-      '🔎 Suche das Eingabefeld für eine Kanalmeldung...'
-    );
+    console.log('🔎 Untersuche mögliche Eingabefelder...');
 
-    const editorFound = await page.evaluate(() => {
-      const editors = [
-        ...document.querySelectorAll(
-          '[contenteditable="true"]'
+    const diagnostics = await page.evaluate(() => {
+      const selectors = [
+        'textarea',
+        'input',
+        '[contenteditable]',
+        '[role="textbox"]',
+        '[aria-label]',
+        '[data-testid]',
+        '[data-placeholder]'
+      ];
+
+      const elements = [
+        ...new Set(
+          selectors.flatMap(selector =>
+            [...document.querySelectorAll(selector)]
+          )
         )
       ];
 
-      const editor = editors.find(el => {
-        const aria =
-          el.getAttribute('aria-label') || '';
-
-        const placeholder =
-          el.getAttribute('data-placeholder') || '';
-
-        const text =
-          `${aria} ${placeholder}`.toLowerCase();
-
-        return (
-          text.includes('meldung') ||
-          text.includes('message')
-        );
-      }) || editors.at(-1);
-
-      if (!editor) {
-        return false;
-      }
-
-      editor.setAttribute(
-        'data-bot-target',
-        'channel-editor'
-      );
-
-      editor.focus();
-
-      return true;
+      return elements
+        .map((el, index) => ({
+          index,
+          tag: el.tagName,
+          type: el.getAttribute('type'),
+          role: el.getAttribute('role'),
+          contenteditable: el.getAttribute('contenteditable'),
+          aria: el.getAttribute('aria-label'),
+          testid: el.getAttribute('data-testid'),
+          placeholder:
+            el.getAttribute('placeholder') ||
+            el.getAttribute('data-placeholder'),
+          text:
+            (el.innerText || el.textContent || '')
+              .trim()
+              .slice(0, 120),
+          visible: !!(
+            el.offsetWidth ||
+            el.offsetHeight ||
+            el.getClientRects().length
+          )
+        }))
+        .filter(item =>
+          item.visible &&
+          (
+            item.tag === 'TEXTAREA' ||
+            item.tag === 'INPUT' ||
+            item.role === 'textbox' ||
+            item.contenteditable !== null ||
+            item.aria ||
+            item.testid ||
+            item.placeholder
+          )
+        )
+        .slice(0, 100);
     });
 
-    if (!editorFound) {
-      console.error(
-        '❌ Eingabefeld des Kanals wurde nicht gefunden.'
-      );
-
-      const editorDiagnostics =
-        await page.evaluate(() => {
-          return [
-            ...document.querySelectorAll(
-              '[contenteditable="true"]'
-            )
-          ].map(el => ({
-            aria:
-              el.getAttribute('aria-label'),
-            placeholder:
-              el.getAttribute(
-                'data-placeholder'
-              )
-          }));
-        });
-
-      console.log(
-        '🔍 Gefundene Eingabefelder:',
-        editorDiagnostics
-      );
-
-      return;
-    }
-
-    console.log('✅ Eingabefeld gefunden.');
-
-    /*
-     * SCHRITT 4:
-     * Testnachricht schreiben.
-     */
-    const selector =
-      '[data-bot-target="channel-editor"]';
-
-    await page.click(selector);
-
-    await page.keyboard.type(
-      TEST_MESSAGE,
-      { delay: 50 }
-    );
-
-    await sleep(1000);
-
-    console.log(
-      `✍️ Testtext eingetragen: "${TEST_MESSAGE}"`
-    );
-
-    /*
-     * SCHRITT 5:
-     * Enter drücken und damit posten.
-     */
-    await page.keyboard.press('Enter');
-
-    console.log('📤 Enter gedrückt.');
-
-    await sleep(5000);
-
-    /*
-     * SCHRITT 6:
-     * Prüfen, ob die Meldung anschließend sichtbar ist.
-     */
-    const messageVisible = await page.evaluate(
-      (testMessage) => {
-        return [
-          ...document.querySelectorAll('*')
-        ].some(
-          el =>
-            el.textContent?.trim() ===
-            testMessage
-        );
-      },
-      TEST_MESSAGE
-    );
-
+    console.log('================================');
+    console.log('🔍 DIAGNOSE DER SICHTBAREN ELEMENTE');
     console.log('================================');
 
-    if (messageVisible) {
-      console.log(
-        '🎉 TEST ERFOLGREICH!'
-      );
-      console.log(
-        `✅ "${TEST_MESSAGE}" ist im Kanal sichtbar.`
-      );
-    } else {
-      console.log(
-        '⚠️ Enter wurde ausgeführt, aber die Testmeldung konnte anschließend nicht eindeutig im DOM bestätigt werden.'
-      );
-    }
+    diagnostics.forEach(item => {
+      console.log('---');
+      console.log('Index:', item.index);
+      console.log('Tag:', item.tag);
+      console.log('Type:', item.type);
+      console.log('Role:', item.role);
+      console.log('Contenteditable:', item.contenteditable);
+      console.log('ARIA:', item.aria);
+      console.log('TestID:', item.testid);
+      console.log('Placeholder:', item.placeholder);
+      console.log('Text:', item.text);
+    });
 
+    console.log('================================');
+    console.log('✅ Diagnose abgeschlossen.');
+    console.log('➡️ Noch keine Nachricht wurde gesendet.');
     console.log('================================');
   });
 
