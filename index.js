@@ -5,14 +5,128 @@ const mongoose = require('mongoose');
 const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
+
+/*
+============================================================
+EINSTELLUNGEN
+============================================================
+*/
+
+const TIKTOK_USERNAME = 'feliiiocean';
+
 const CHANNEL_NAME = 'Jorne_L1ve';
-const TEST_MESSAGE = 'BOT-TEST AUTOMATISCH UI';
+
+const LIVE_MESSAGE =
+  `🔴 Jorne ist jetzt LIVE auf TikTok!\n\n` +
+  `👉 Direkt zum Live:\n` +
+  `https://www.tiktok.com/@${TIKTOK_USERNAME}/live`;
 
 const CLIENT_ID = 'jorne-whatsapp-live';
-const AUTH_DATA_PATH = path.resolve('./.wwebjs_auth');
 
-let testStarted = false;
-let testRunning = false;
+const AUTH_DATA_PATH =
+  path.resolve('./.wwebjs_auth');
+
+const TIKTOK_CHECK_INTERVAL_MS =
+  60 * 1000;
+
+const TIKTOK_TIMEOUT_MS =
+  20 * 1000;
+
+
+let whatsappReady = false;
+
+let liveCheckRunning = false;
+
+let monitorStarted = false;
+
+let sendRunning = false;
+
+
+/*
+============================================================
+MONGODB LIVE-STATUS
+============================================================
+*/
+
+const TikTokStateSchema =
+  new mongoose.Schema(
+    {
+      username: {
+        type: String,
+        required: true,
+        unique: true
+      },
+
+      live: {
+        type: Boolean,
+        default: false
+      },
+
+      changedAt: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      versionKey: false
+    }
+  );
+
+
+const TikTokState =
+  mongoose.model(
+    'TikTokState',
+    TikTokStateSchema
+  );
+
+
+async function getSavedLiveState() {
+
+  const state =
+    await TikTokState
+      .findOne({
+        username:
+          TIKTOK_USERNAME
+      })
+      .lean();
+
+
+  if (!state) {
+    return false;
+  }
+
+
+  return Boolean(
+    state.live
+  );
+}
+
+
+async function saveLiveState(
+  live
+) {
+
+  await TikTokState.updateOne(
+    {
+      username:
+        TIKTOK_USERNAME
+    },
+
+    {
+      $set: {
+        live:
+          Boolean(live),
+
+        changedAt:
+          new Date()
+      }
+    },
+
+    {
+      upsert: true
+    }
+  );
+}
 
 
 /*
@@ -21,77 +135,142 @@ REMOTEAUTH + MONGODB FIX
 ============================================================
 */
 
-class FixedMongoStore extends MongoStore {
-  constructor({ mongoose, dataPath }) {
-    super({ mongoose });
+class FixedMongoStore
+  extends MongoStore {
 
-    this.fixedMongoose = mongoose;
-    this.dataPath = dataPath;
+  constructor({
+    mongoose,
+    dataPath
+  }) {
+
+    super({
+      mongoose
+    });
+
+
+    this.fixedMongoose =
+      mongoose;
+
+
+    this.dataPath =
+      dataPath;
   }
 
-  async save(options) {
-    const session = options.session;
 
-    const zipPath = path.join(
-      this.dataPath,
-      `${session}.zip`
-    );
+  async save(options) {
+
+    const session =
+      options.session;
+
+
+    const zipPath =
+      path.join(
+        this.dataPath,
+        `${session}.zip`
+      );
+
 
     console.log(
       '💾 MongoStore: Speichere Sitzung aus:',
       zipPath
     );
 
-    if (!fs.existsSync(zipPath)) {
+
+    if (
+      !fs.existsSync(
+        zipPath
+      )
+    ) {
+
       throw new Error(
         `RemoteAuth-ZIP wurde nicht gefunden: ${zipPath}`
       );
     }
 
+
     const bucket =
       new this.fixedMongoose.mongo.GridFSBucket(
         this.fixedMongoose.connection.db,
+
         {
-          bucketName: `whatsapp-${session}`
+          bucketName:
+            `whatsapp-${session}`
         }
       );
 
-    await new Promise((resolve, reject) => {
-      const readStream =
-        fs.createReadStream(zipPath);
 
-      const uploadStream =
-        bucket.openUploadStream(
-          `${session}.zip`
+    await new Promise(
+      (
+        resolve,
+        reject
+      ) => {
+
+        const readStream =
+          fs.createReadStream(
+            zipPath
+          );
+
+
+        const uploadStream =
+          bucket.openUploadStream(
+            `${session}.zip`
+          );
+
+
+        readStream.on(
+          'error',
+          reject
         );
 
-      readStream.on('error', reject);
-      uploadStream.on('error', reject);
-      uploadStream.on('finish', resolve);
 
-      readStream.pipe(uploadStream);
-    });
+        uploadStream.on(
+          'error',
+          reject
+        );
+
+
+        uploadStream.on(
+          'finish',
+          resolve
+        );
+
+
+        readStream.pipe(
+          uploadStream
+        );
+      }
+    );
+
 
     const documents =
       await bucket
         .find({
-          filename: `${session}.zip`
+          filename:
+            `${session}.zip`
         })
         .sort({
           uploadDate: -1
         })
         .toArray();
 
-    if (documents.length > 1) {
+
+    if (
+      documents.length > 1
+    ) {
+
       for (
         const document
         of documents.slice(1)
       ) {
+
         try {
+
           await bucket.delete(
             document._id
           );
+
         } catch (error) {
+
           console.log(
             '⚠️ Alte Sicherung konnte nicht gelöscht werden:',
             error.message
@@ -99,6 +278,7 @@ class FixedMongoStore extends MongoStore {
         }
       }
     }
+
 
     console.log(
       '✅ WhatsApp-Sitzung erfolgreich in MongoDB gespeichert.'
@@ -114,9 +294,158 @@ WARTEFUNKTION
 */
 
 function sleep(ms) {
+
   return new Promise(
-    resolve => setTimeout(resolve, ms)
+    resolve =>
+      setTimeout(
+        resolve,
+        ms
+      )
   );
+}
+
+
+/*
+============================================================
+TIMEOUT
+============================================================
+*/
+
+function withTimeout(
+  promise,
+  milliseconds
+) {
+
+  let timeout;
+
+
+  const timeoutPromise =
+    new Promise(
+      (
+        _,
+        reject
+      ) => {
+
+        timeout =
+          setTimeout(
+            () => {
+
+              const error =
+                new Error(
+                  `TikTok antwortet nach ${milliseconds / 1000} Sekunden nicht.`
+                );
+
+
+              error.name =
+                'TimeoutError';
+
+
+              reject(
+                error
+              );
+
+            },
+
+            milliseconds
+          );
+      }
+    );
+
+
+  return Promise
+    .race([
+      promise,
+      timeoutPromise
+    ])
+    .finally(
+      () => {
+
+        clearTimeout(
+          timeout
+        );
+      }
+    );
+}
+
+
+/*
+============================================================
+TIKTOK LIVE-STATUS ABFRAGEN
+============================================================
+*/
+
+async function checkTikTokLive() {
+
+  /*
+   * tiktok-live-connector wird dynamisch geladen,
+   * damit unser bestehender CommonJS-Code mit
+   * require(...) unverändert funktionieren kann.
+   */
+
+  const module =
+    await import(
+      'tiktok-live-connector'
+    );
+
+
+  const TikTokLiveConnection =
+    module.TikTokLiveConnection;
+
+
+  if (
+    !TikTokLiveConnection
+  ) {
+
+    throw new Error(
+      'TikTokLiveConnection konnte nicht geladen werden.'
+    );
+  }
+
+
+  const connection =
+    new TikTokLiveConnection(
+      TIKTOK_USERNAME,
+      {}
+    );
+
+
+  try {
+
+    console.log(
+      `🔎 Prüfe TikTok-Status von @${TIKTOK_USERNAME} ...`
+    );
+
+
+    const isLive =
+      await withTimeout(
+        connection.fetchIsLive(),
+        TIKTOK_TIMEOUT_MS
+      );
+
+
+    console.log(
+      `📡 TikTok-Status: ${isLive ? 'LIVE 🔴' : 'offline ⚫'}`
+    );
+
+
+    return Boolean(
+      isLive
+    );
+
+  } finally {
+
+    try {
+
+      await connection.disconnect();
+
+    } catch {
+
+      /*
+       * Falls keine aktive Verbindung besteht,
+       * gibt es nichts zu trennen.
+       */
+    }
+  }
 }
 
 
@@ -126,240 +455,245 @@ WHATSAPP-POPUP SCHLIESSEN
 ============================================================
 */
 
-async function closeWhatsAppPopup(page) {
+async function closeWhatsAppPopup(
+  page
+) {
 
   console.log(
     '🔎 Prüfe auf WhatsApp-Popup...'
   );
 
-  const result =
-    await page.evaluate(() => {
 
-      function isVisible(element) {
-        if (!element) {
-          return false;
+  const result =
+    await page.evaluate(
+      () => {
+
+        function isVisible(
+          element
+        ) {
+
+          if (!element) {
+            return false;
+          }
+
+
+          const rect =
+            element
+              .getBoundingClientRect();
+
+
+          const style =
+            window.getComputedStyle(
+              element
+            );
+
+
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !==
+              'none' &&
+            style.visibility !==
+              'hidden'
+          );
         }
 
-        const rect =
-          element.getBoundingClientRect();
 
-        const style =
-          window.getComputedStyle(
-            element
-          );
+        function getText(
+          element
+        ) {
 
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden'
-        );
-      }
-
-
-      function getText(element) {
-        return (
-          element?.textContent ||
-          ''
-        )
-          .replace(/\s+/g, ' ')
-          .trim();
-      }
-
-
-      let popup =
-        document.querySelector(
-          '[data-testid="confirm-popup"]'
-        );
-
-
-      if (
-        !popup ||
-        !isVisible(popup)
-      ) {
-        popup =
-          document.querySelector(
-            '[data-testid="popup-contents"]'
-          );
-      }
-
-
-      if (
-        !popup ||
-        !isVisible(popup)
-      ) {
-        popup =
-          [
-            ...document.querySelectorAll(
-              '[role="dialog"]'
-            )
-          ].find(
-            isVisible
-          );
-      }
-
-
-      if (!popup) {
-        return {
-          found: false,
-          closed: false
-        };
-      }
-
-
-      const popupText =
-        getText(popup)
-          .slice(
-            0,
-            500
-          );
-
-
-      const candidates =
-        [
-          ...popup.querySelectorAll(
-            [
-              'button',
-              '[role="button"]',
-              '[tabindex]',
-              '[aria-label]'
-            ].join(',')
+          return (
+            element?.textContent ||
+            ''
           )
-        ]
-          .filter(
-            isVisible
+            .replace(
+              /\s+/g,
+              ' '
+            )
+            .trim();
+        }
+
+
+        let popup =
+          document.querySelector(
+            '[data-testid="confirm-popup"]'
           );
 
 
-      let closeButton =
-        candidates.find(
-          element => {
+        if (
+          !popup ||
+          !isVisible(
+            popup
+          )
+        ) {
 
-            const aria =
-              (
-                element.getAttribute(
-                  'aria-label'
-                ) || ''
-              )
-                .trim()
-                .toLowerCase();
-
-            const testId =
-              (
-                element.getAttribute(
-                  'data-testid'
-                ) || ''
-              )
-                .trim()
-                .toLowerCase();
-
-            const text =
-              getText(element)
-                .toLowerCase();
-
-            return (
-              aria === 'schließen' ||
-              aria === 'close' ||
-              aria.includes(
-                'schließen'
-              ) ||
-              testId.includes(
-                'close'
-              ) ||
-              text === 'schließen' ||
-              text === 'close'
+          popup =
+            document.querySelector(
+              '[data-testid="popup-contents"]'
             );
-          }
-        );
+        }
 
 
-      if (!closeButton) {
-        closeButton =
+        if (
+          !popup ||
+          !isVisible(
+            popup
+          )
+        ) {
+
+          popup =
+            [
+              ...document.querySelectorAll(
+                '[role="dialog"]'
+              )
+            ]
+              .find(
+                isVisible
+              );
+        }
+
+
+        if (!popup) {
+
+          return {
+            found: false,
+            closed: false
+          };
+        }
+
+
+        const candidates =
+          [
+            ...popup.querySelectorAll(
+              [
+                'button',
+                '[role="button"]',
+                '[tabindex]',
+                '[aria-label]'
+              ].join(',')
+            )
+          ]
+            .filter(
+              isVisible
+            );
+
+
+        let closeButton =
           candidates.find(
             element => {
 
-              const content =
+              const aria =
+                (
+                  element.getAttribute(
+                    'aria-label'
+                  ) ||
+                  ''
+                )
+                  .trim()
+                  .toLowerCase();
+
+
+              const testId =
+                (
+                  element.getAttribute(
+                    'data-testid'
+                  ) ||
+                  ''
+                )
+                  .trim()
+                  .toLowerCase();
+
+
+              const text =
+                getText(
+                  element
+                )
+                  .toLowerCase();
+
+
+              const html =
                 (
                   element.innerHTML ||
                   ''
                 )
                   .toLowerCase();
 
+
               return (
-                content.includes(
+                aria.includes(
+                  'schließen'
+                ) ||
+                aria ===
+                  'close' ||
+                testId.includes(
+                  'close'
+                ) ||
+                text ===
+                  'schließen' ||
+                text ===
+                  'close' ||
+                html.includes(
                   'ic-close'
                 ) ||
-                content.includes(
+                html.includes(
                   'wds-ic-close'
                 )
               );
             }
           );
-      }
 
 
-      if (!closeButton) {
-        closeButton =
-          candidates.find(
-            element => {
+        if (!closeButton) {
 
-              const text =
-                getText(element)
-                  .toLowerCase();
+          closeButton =
+            candidates.find(
+              element => {
 
-              return (
-                text === 'ok' ||
-                text === 'okay' ||
-                text === 'verstanden' ||
-                text === 'fertig' ||
-                text === 'weiter' ||
-                text === 'nicht jetzt'
-              );
-            }
-          );
-      }
+                const text =
+                  getText(
+                    element
+                  )
+                    .toLowerCase();
 
 
-      if (!closeButton) {
-        return {
-          found: true,
-          closed: false,
-          text: popupText
-        };
-      }
+                return (
+                  text ===
+                    'ok' ||
+                  text ===
+                    'okay' ||
+                  text ===
+                    'verstanden' ||
+                  text ===
+                    'fertig' ||
+                  text ===
+                    'weiter' ||
+                  text ===
+                    'nicht jetzt'
+                );
+              }
+            );
+        }
 
 
-      try {
+        if (!closeButton) {
+
+          return {
+            found: true,
+            closed: false
+          };
+        }
+
+
         closeButton.click();
 
-        return {
-          found: true,
-          closed: true,
-          text: popupText,
-          buttonText:
-            getText(
-              closeButton
-            ),
-          buttonAria:
-            closeButton.getAttribute(
-              'aria-label'
-            )
-        };
-
-      } catch (error) {
 
         return {
           found: true,
-          closed: false,
-          text: popupText,
-          error:
-            String(
-              error?.message ||
-              error
-            )
+          closed: true
         };
       }
-    });
+    );
 
 
   console.log(
@@ -372,13 +706,18 @@ async function closeWhatsAppPopup(page) {
     result.found &&
     result.closed
   ) {
+
     console.log(
       '✅ WhatsApp-Popup geschlossen.'
     );
 
-    await sleep(2500);
 
-    return true;
+    await sleep(
+      2000
+    );
+
+
+    return;
   }
 
 
@@ -386,37 +725,25 @@ async function closeWhatsAppPopup(page) {
     result.found &&
     !result.closed
   ) {
-    console.log(
-      '⚠️ Popup erkannt, aber kein geeigneter Schließen-Button gefunden.'
-    );
 
     try {
+
       await page.keyboard.press(
         'Escape'
       );
 
-      await sleep(2000);
+
+      await sleep(
+        1500
+      );
+
 
       console.log(
         '⌨️ ESC zum Schließen des Popups gedrückt.'
       );
 
-    } catch (error) {
-      console.log(
-        '⚠️ ESC konnte nicht ausgeführt werden:',
-        error.message
-      );
-    }
-
-    return true;
+    } catch {}
   }
-
-
-  console.log(
-    '✅ Kein störendes WhatsApp-Popup sichtbar.'
-  );
-
-  return false;
 }
 
 
@@ -433,29 +760,43 @@ async function inspectRightChannelArea(
   return await page.evaluate(
     channelName => {
 
-      function isVisible(element) {
+      function isVisible(
+        element
+      ) {
+
         if (!element) {
           return false;
         }
 
+
         const rect =
-          element.getBoundingClientRect();
+          element
+            .getBoundingClientRect();
+
 
         const style =
           window.getComputedStyle(
             element
           );
 
+
         return (
           rect.width > 0 &&
           rect.height > 0 &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden'
+          style.display !==
+            'none' &&
+          style.visibility !==
+            'hidden'
         );
       }
 
 
-      const rightSideElements =
+      const channelNameLower =
+        channelName
+          .toLowerCase();
+
+
+      const elements =
         [
           ...document.querySelectorAll(
             [
@@ -476,29 +817,31 @@ async function inspectRightChannelArea(
             element => {
 
               const rect =
-                element.getBoundingClientRect();
+                element
+                  .getBoundingClientRect();
+
 
               return (
                 rect.left >
-                window.innerWidth * 0.32
+                window.innerWidth *
+                  0.32
               );
             }
           );
 
 
-      const channelNameLower =
-        channelName.toLowerCase();
-
-
       const matchingElements =
-        rightSideElements
+        elements
           .map(
             element => {
 
               const rect =
-                element.getBoundingClientRect();
+                element
+                  .getBoundingClientRect();
+
 
               return {
+
                 tag:
                   element.tagName,
 
@@ -563,9 +906,14 @@ async function inspectRightChannelArea(
                   item.testId,
                   item.text
                 ]
-                  .filter(Boolean)
-                  .join(' ')
+                  .filter(
+                    Boolean
+                  )
+                  .join(
+                    ' '
+                  )
                   .toLowerCase();
+
 
               return (
                 combined.includes(
@@ -620,16 +968,16 @@ async function inspectRightChannelArea(
               .toLowerCase()
               .includes(
                 channelNameLower
-              ) &&
-            item.left >
-              window.innerWidth *
-                0.32
+              )
         );
 
 
       return {
+
         emptyState,
+
         channelNameVisibleRight,
+
         matchingElements
       };
     },
@@ -641,142 +989,76 @@ async function inspectRightChannelArea(
 
 /*
 ============================================================
-KANAL-UI-TEST
+KANAL ÖFFNEN
 ============================================================
 */
 
-async function runChannelUITest(
-  client,
-  reason
+async function openWhatsAppChannel(
+  page
 ) {
 
-  if (
-    testStarted ||
-    testRunning
-  ) {
-    return;
-  }
-
-
-  testRunning = true;
-
+  /*
+  ----------------------------------------------------------
+  KANÄLE-BEREICH FINDEN
+  ----------------------------------------------------------
+  */
 
   console.log(
-    '================================'
-  );
-
-  console.log(
-    '🚀 STARTE WHATSAPP-KANAL-UI-TEST'
-  );
-
-  console.log(
-    'Auslöser:',
-    reason
-  );
-
-  console.log(
-    '================================'
+    '🔎 Suche Bereich "Kanäle"...'
   );
 
 
-  try {
+  const channelAreaResult =
+    await page.evaluate(
+      () => {
 
-    /*
-    ----------------------------------------------------------
-    STATUS
-    ----------------------------------------------------------
-    */
+        function normalize(
+          value
+        ) {
 
-    const state =
-      await client.getState();
-
-
-    console.log(
-      '📡 WhatsApp-Status:',
-      state
-    );
-
-
-    if (
-      state !== 'CONNECTED'
-    ) {
-      console.log(
-        '❌ WhatsApp ist nicht CONNECTED.'
-      );
-
-      return;
-    }
-
-
-    const page =
-      client.pupPage;
-
-
-    if (!page) {
-      console.log(
-        '❌ Puppeteer-Seite wurde nicht gefunden.'
-      );
-
-      return;
-    }
-
-
-    testStarted = true;
-
-
-    await sleep(3000);
-
-
-    /*
-    ----------------------------------------------------------
-    SCHRITT 1:
-    KANÄLE ÖFFNEN
-    ----------------------------------------------------------
-    */
-
-    console.log(
-      '🔎 Suche Bereich "Kanäle"...'
-    );
-
-
-    const channelAreaResult =
-      await page.evaluate(() => {
-
-        function normalize(value) {
           return String(
-            value || ''
+            value ||
+            ''
           )
-            .replace(/\s+/g, ' ')
+            .replace(
+              /\s+/g,
+              ' '
+            )
             .trim()
             .toLowerCase();
         }
 
 
-        function isVisible(element) {
+        function isVisible(
+          element
+        ) {
+
           if (!element) {
             return false;
           }
 
+
           const rect =
-            element.getBoundingClientRect();
+            element
+              .getBoundingClientRect();
+
 
           const style =
             window.getComputedStyle(
               element
             );
 
+
           return (
             rect.width > 0 &&
             rect.height > 0 &&
-            style.display !== 'none' &&
-            style.visibility !== 'hidden'
+            style.display !==
+              'none' &&
+            style.visibility !==
+              'hidden'
           );
         }
 
-
-        /*
-         * Alten Marker entfernen.
-         */
 
         document
           .querySelectorAll(
@@ -816,13 +1098,18 @@ async function runChannelUITest(
 
         if (
           target &&
-          !isVisible(target)
+          !isVisible(
+            target
+          )
         ) {
-          target = null;
+
+          target =
+            null;
         }
 
 
         if (!target) {
+
           target =
             elements.find(
               element =>
@@ -837,6 +1124,7 @@ async function runChannelUITest(
 
 
         if (!target) {
+
           target =
             elements.find(
               element => {
@@ -847,6 +1135,7 @@ async function runChannelUITest(
                       'data-testid'
                     )
                   );
+
 
                 return (
                   testId ===
@@ -861,6 +1150,7 @@ async function runChannelUITest(
 
 
         if (!target) {
+
           target =
             elements.find(
               element =>
@@ -873,6 +1163,7 @@ async function runChannelUITest(
 
 
         if (!target) {
+
           target =
             elements.find(
               element => {
@@ -883,6 +1174,7 @@ async function runChannelUITest(
                     ''
                   )
                     .toLowerCase();
+
 
                 return (
                   html.includes(
@@ -898,8 +1190,9 @@ async function runChannelUITest(
 
 
         if (!target) {
+
           return {
-            opened: false
+            found: false
           };
         }
 
@@ -923,865 +1216,112 @@ async function runChannelUITest(
 
 
         return {
-          opened: true,
-
-          tag:
-            clickable.tagName,
-
-          aria:
-            clickable.getAttribute(
-              'aria-label'
-            ),
-
-          testId:
-            clickable.getAttribute(
-              'data-testid'
-            ),
-
-          role:
-            clickable.getAttribute(
-              'role'
-            ),
-
-          text:
-            (
-              clickable.textContent ||
-              ''
-            )
-              .trim()
-              .slice(
-                0,
-                120
-              )
+          found: true
         };
+      }
+    );
+
+
+  if (
+    !channelAreaResult.found
+  ) {
+
+    throw new Error(
+      'Bereich "Kanäle" wurde nicht gefunden.'
+    );
+  }
+
+
+  const channelsButton =
+    await page.$(
+      '[data-bot-channels-button="true"]'
+    );
+
+
+  if (!channelsButton) {
+
+    throw new Error(
+      'Markierter Kanäle-Button wurde nicht gefunden.'
+    );
+  }
+
+
+  await channelsButton.evaluate(
+    element => {
+
+      element.scrollIntoView({
+        block: 'center',
+        inline: 'center'
       });
-
-
-    console.log(
-      '📺 Kanäle-Navigation:',
-      channelAreaResult
-    );
-
-
-    if (
-      !channelAreaResult.opened
-    ) {
-      console.log(
-        '❌ Bereich "Kanäle" wurde nicht gefunden.'
-      );
-
-      testStarted = false;
-
-      return;
     }
+  );
 
 
-    /*
-     * ECHTER PUPPETEER-KLICK.
-     */
-
-    const channelsButton =
-      await page.$(
-        '[data-bot-channels-button="true"]'
-      );
+  await sleep(
+    500
+  );
 
 
-    if (!channelsButton) {
-      console.log(
-        '❌ Markierter Kanäle-Button wurde nicht wiedergefunden.'
-      );
-
-      testStarted = false;
-
-      return;
-    }
+  await channelsButton.click({
+    delay: 120
+  });
 
 
-    await channelsButton.evaluate(
-      element => {
-        element.scrollIntoView({
-          block: 'center',
-          inline: 'center'
-        });
-      }
-    );
+  console.log(
+    '✅ Bereich "Kanäle" geöffnet.'
+  );
 
 
-    await sleep(500);
+  await sleep(
+    4500
+  );
 
 
-    await channelsButton.click({
-      delay: 120
-    });
+  await closeWhatsAppPopup(
+    page
+  );
 
 
-    console.log(
-      '✅ Bereich "Kanäle" mit Puppeteer angeklickt.'
-    );
+  await sleep(
+    2500
+  );
 
 
-    await sleep(4500);
+  /*
+  ----------------------------------------------------------
+  JORNE_L1VE FINDEN
+  ----------------------------------------------------------
+  */
+
+  console.log(
+    `🔎 Suche Kanal "${CHANNEL_NAME}"...`
+  );
 
 
-    /*
-    ----------------------------------------------------------
-    SCHRITT 1B:
-    POPUP
-    ----------------------------------------------------------
-    */
+  const channelResult =
+    await page.evaluate(
+      channelName => {
 
-    await closeWhatsAppPopup(
-      page
-    );
+        function normalize(
+          value
+        ) {
 
-
-    await sleep(2500);
-
-
-    /*
-    ----------------------------------------------------------
-    SCHRITT 2:
-    JORNE_L1VE FINDEN
-    ----------------------------------------------------------
-    */
-
-    console.log(
-      `🔎 Suche Kanal "${CHANNEL_NAME}"...`
-    );
-
-
-    const channelResult =
-      await page.evaluate(
-        channelName => {
-
-          function normalize(value) {
-            return String(
-              value || ''
+          return String(
+            value ||
+            ''
+          )
+            .replace(
+              /\s+/g,
+              ' '
             )
-              .replace(/\s+/g, ' ')
-              .trim()
-              .toLowerCase();
-          }
-
-
-          function isVisible(element) {
-            if (!element) {
-              return false;
-            }
-
-            const rect =
-              element.getBoundingClientRect();
-
-            const style =
-              window.getComputedStyle(
-                element
-              );
-
-            return (
-              rect.width > 0 &&
-              rect.height > 0 &&
-              style.display !== 'none' &&
-              style.visibility !== 'hidden'
-            );
-          }
-
-
-          function getInfo(element) {
-            const rect =
-              element.getBoundingClientRect();
-
-            return {
-              tag:
-                element.tagName,
-
-              aria:
-                element.getAttribute(
-                  'aria-label'
-                ),
-
-              testId:
-                element.getAttribute(
-                  'data-testid'
-                ),
-
-              role:
-                element.getAttribute(
-                  'role'
-                ),
-
-              text:
-                (
-                  element.textContent ||
-                  ''
-                )
-                  .replace(
-                    /\s+/g,
-                    ' '
-                  )
-                  .trim()
-                  .slice(
-                    0,
-                    250
-                  ),
-
-              width:
-                Math.round(
-                  rect.width
-                ),
-
-              height:
-                Math.round(
-                  rect.height
-                ),
-
-              left:
-                Math.round(
-                  rect.left
-                ),
-
-              top:
-                Math.round(
-                  rect.top
-                )
-            };
-          }
-
-
-          document
-            .querySelectorAll(
-              '[data-bot-channel-target]'
-            )
-            .forEach(
-              element =>
-                element.removeAttribute(
-                  'data-bot-channel-target'
-                )
-            );
-
-
-          const wanted =
-            normalize(
-              channelName
-            );
-
-
-          /*
-           * Die Logs haben genau diesen data-testid
-           * für Jorne_L1ve bestätigt.
-           */
-
-          const newsletterCells =
-            [
-              ...document.querySelectorAll(
-                '[data-testid="newsletter-tab-newsletter-cell"]'
-              )
-            ]
-              .filter(
-                isVisible
-              );
-
-
-          let target =
-            newsletterCells.find(
-              element => {
-
-                const text =
-                  normalize(
-                    element.textContent
-                  );
-
-                const aria =
-                  normalize(
-                    element.getAttribute(
-                      'aria-label'
-                    )
-                  );
-
-                return (
-                  aria ===
-                    `kanal ${wanted}` ||
-                  aria.includes(
-                    wanted
-                  ) ||
-                  text.startsWith(
-                    wanted
-                  )
-                );
-              }
-            );
-
-
-          /*
-           * Zweiter Fallback.
-           */
-
-          if (!target) {
-            target =
-              newsletterCells.find(
-                element => {
-
-                  const info =
-                    getInfo(
-                      element
-                    );
-
-                  return (
-                    normalize(
-                      info.text
-                    ).includes(
-                      wanted
-                    ) ||
-                    normalize(
-                      info.aria
-                    ).includes(
-                      wanted
-                    )
-                  );
-                }
-              );
-          }
-
-
-          /*
-           * Dritter Fallback.
-           */
-
-          if (!target) {
-
-            const clickables =
-              [
-                ...document.querySelectorAll(
-                  [
-                    '[role="button"]',
-                    '[role="listitem"]',
-                    '[tabindex]',
-                    'button'
-                  ].join(',')
-                )
-              ]
-                .filter(
-                  isVisible
-                );
-
-
-            target =
-              clickables.find(
-                element => {
-
-                  const info =
-                    getInfo(
-                      element
-                    );
-
-                  const text =
-                    normalize(
-                      info.text
-                    );
-
-                  const aria =
-                    normalize(
-                      info.aria
-                    );
-
-
-                  return (
-                    (
-                      text.includes(
-                        wanted
-                      ) ||
-                      aria.includes(
-                        wanted
-                      )
-                    ) &&
-                    info.left <
-                      window.innerWidth *
-                        0.5 &&
-                    info.width <
-                      600 &&
-                    info.height <
-                      200
-                  );
-                }
-              );
-          }
-
-
-          if (!target) {
-
-            const possible =
-              newsletterCells
-                .map(
-                  getInfo
-                )
-                .slice(
-                  0,
-                  30
-                );
-
-
-            return {
-              found: false,
-              possible
-            };
-          }
-
-
-          const info =
-            getInfo(
-              target
-            );
-
-
-          /*
-           * Sicherheitscheck:
-           * Die bestätigte Jorne-Zelle lag links
-           * bei ca. 65 px und war rund 409 x 72 px.
-           */
-
-          if (
-            info.left >
-              window.innerWidth *
-                0.55 ||
-            info.width >
-              700 ||
-            info.height >
-              300
-          ) {
-
-            return {
-              found: false,
-              rejected: info
-            };
-          }
-
-
-          target.setAttribute(
-            'data-bot-channel-target',
-            'true'
-          );
-
-
-          return {
-            found: true,
-            selected: info
-          };
-        },
-
-        CHANNEL_NAME
-      );
-
-
-    console.log(
-      '📺 Kanal-Suche:',
-      channelResult
-    );
-
-
-    if (
-      !channelResult.found
-    ) {
-
-      console.log(
-        `❌ Kanal "${CHANNEL_NAME}" wurde nicht sicher gefunden.`
-      );
-
-
-      if (
-        channelResult.rejected
-      ) {
-        console.log(
-          '⚠️ Unsicherer Treffer:',
-          channelResult.rejected
-        );
-      }
-
-
-      if (
-        channelResult.possible
-      ) {
-        console.log(
-          '🔎 Gefundene Kanalzellen:',
-          channelResult.possible
-        );
-      }
-
-
-      testStarted = false;
-
-      return;
-    }
-
-
-    console.log(
-      '🎯 Gefundene Kanal-Zelle:',
-      channelResult.selected
-    );
-
-
-    /*
-     * Wichtigste Änderung:
-     * KEIN element.click() im Browser-JavaScript,
-     * sondern Puppeteers echter Klick.
-     */
-
-    const channelHandle =
-      await page.$(
-        '[data-bot-channel-target="true"]'
-      );
-
-
-    if (!channelHandle) {
-
-      console.log(
-        '❌ Markierte Jorne-Kanal-Zelle konnte nicht erneut gefunden werden.'
-      );
-
-      testStarted = false;
-
-      return;
-    }
-
-
-    await channelHandle.evaluate(
-      element => {
-
-        element.scrollIntoView({
-          block: 'center',
-          inline: 'center'
-        });
-      }
-    );
-
-
-    await sleep(700);
-
-
-    const box =
-      await channelHandle.boundingBox();
-
-
-    console.log(
-      '🖱️ Klickposition Kanal:',
-      box
-    );
-
-
-    if (!box) {
-
-      console.log(
-        '❌ Keine Klickposition für Kanal-Zelle verfügbar.'
-      );
-
-      testStarted = false;
-
-      return;
-    }
-
-
-    /*
-     * Direkter Maus-Klick auf die Mitte
-     * der Kanal-Zelle.
-     */
-
-    await page.mouse.move(
-      box.x +
-        box.width / 2,
-
-      box.y +
-        box.height / 2
-    );
-
-
-    await sleep(300);
-
-
-    await page.mouse.click(
-      box.x +
-        box.width / 2,
-
-      box.y +
-        box.height / 2,
-      {
-        delay: 150
-      }
-    );
-
-
-    console.log(
-      `✅ ECHTER MAUSKLICK auf "${CHANNEL_NAME}" ausgeführt.`
-    );
-
-
-    /*
-     * Oberfläche Zeit zum Wechseln geben.
-     */
-
-    await sleep(5000);
-
-
-    /*
-     * Sicherheitshalber Popup schließen.
-     */
-
-    await closeWhatsAppPopup(
-      page
-    );
-
-
-    await sleep(2000);
-
-
-    /*
-    ----------------------------------------------------------
-    SCHRITT 2B:
-    PRÜFEN, OB RECHTE SEITE WIRKLICH GEWECHSELT HAT
-    ----------------------------------------------------------
-    */
-
-    const firstChannelCheck =
-      await inspectRightChannelArea(
-        page
-      );
-
-
-    console.log(
-      '🔍 Rechte Kanalansicht nach Klick:',
-      firstChannelCheck
-    );
-
-
-    /*
-     * Falls rechts weiterhin "Kanäle entdecken"
-     * steht, ein zweiter echter Klick.
-     */
-
-    if (
-      firstChannelCheck.emptyState &&
-      !firstChannelCheck.channelNameVisibleRight
-    ) {
-
-      console.log(
-        '⚠️ Rechte Seite zeigt noch "Kanäle entdecken".'
-      );
-
-
-      console.log(
-        '🔁 Zweiter Mausklick auf Jorne_L1ve...'
-      );
-
-
-      const secondHandle =
-        await page.$(
-          '[data-bot-channel-target="true"]'
-        );
-
-
-      if (secondHandle) {
-
-        const secondBox =
-          await secondHandle.boundingBox();
-
-
-        if (secondBox) {
-
-          await page.mouse.click(
-            secondBox.x +
-              secondBox.width / 2,
-
-            secondBox.y +
-              secondBox.height / 2,
-            {
-              delay: 180
-            }
-          );
-
-
-          await sleep(6000);
+            .trim()
+            .toLowerCase();
         }
-      }
-    }
 
 
-    const finalChannelCheck =
-      await inspectRightChannelArea(
-        page
-      );
-
-
-    console.log(
-      '📺 FINALE Kanalansicht:',
-      finalChannelCheck
-    );
-
-
-    /*
-     * Wenn die leere Kanal-Entdecken-Seite
-     * immer noch sichtbar ist, stoppen wir.
-     *
-     * Dadurch suchen wir NICHT mehr sinnlos
-     * nach einem Composer in der falschen Ansicht.
-     */
-
-    if (
-      finalChannelCheck.emptyState &&
-      !finalChannelCheck.channelNameVisibleRight
-    ) {
-
-      console.log(
-        '❌ Jorne_L1ve wurde links gefunden, aber die rechte Kanalansicht wurde trotz echtem Mausklick nicht geöffnet.'
-      );
-
-
-      console.log(
-        '➡️ Bitte Screenshot ab "FINALE Kanalansicht" schicken.'
-      );
-
-
-      testStarted = false;
-
-      return;
-    }
-
-
-    console.log(
-      `✅ Kanal "${CHANNEL_NAME}" ist jetzt tatsächlich geöffnet.`
-    );
-
-
-    await sleep(4000);
-
-
-    /*
-    ----------------------------------------------------------
-    SCHRITT 3:
-    NEWSLETTER-ID
-    ----------------------------------------------------------
-    */
-
-    console.log(
-      '🔎 Suche nach einer @newsletter-ID...'
-    );
-
-
-    const newsletterIds =
-      await page.evaluate(() => {
-
-        const ids =
-          new Set();
-
-
-        try {
-
-          const html =
-            document.documentElement.innerHTML;
-
-
-          const matches =
-            html.match(
-              /[0-9]{5,40}@newsletter/g
-            ) || [];
-
-
-          for (
-            const id
-            of matches
-          ) {
-            ids.add(id);
-          }
-
-        } catch {}
-
-
-        try {
-
-          const possibleStores = [
-
-            window.Store?.NewsletterCollection,
-
-            window.Store?.Newsletter,
-
-            window.Store?.NewsletterStore
-          ];
-
-
-          for (
-            const store
-            of possibleStores
-          ) {
-
-            const models =
-              store?.models ||
-              [];
-
-
-            for (
-              const model
-              of models
-            ) {
-
-              let id =
-                null;
-
-
-              try {
-
-                id =
-                  model?.id?._serialized ||
-                  model?.id?.toString?.() ||
-                  null;
-
-              } catch {}
-
-
-              if (
-                id &&
-                String(
-                  id
-                ).includes(
-                  '@newsletter'
-                )
-              ) {
-
-                ids.add(
-                  String(
-                    id
-                  )
-                );
-              }
-            }
-          }
-
-        } catch {}
-
-
-        return [
-          ...ids
-        ];
-      });
-
-
-    console.log(
-      '📺 Gefundene Newsletter-IDs:',
-      newsletterIds
-    );
-
-
-    /*
-    ----------------------------------------------------------
-    SCHRITT 4:
-    COMPOSER FINDEN
-    ----------------------------------------------------------
-    */
-
-    console.log(
-      '🔎 Suche Meldungs-Eingabefeld...'
-    );
-
-
-    const composerInfo =
-      await page.evaluate(() => {
-
-        function isVisible(element) {
+        function isVisible(
+          element
+        ) {
 
           if (!element) {
             return false;
@@ -1789,7 +1329,8 @@ async function runChannelUITest(
 
 
           const rect =
-            element.getBoundingClientRect();
+            element
+              .getBoundingClientRect();
 
 
           const style =
@@ -1801,90 +1342,33 @@ async function runChannelUITest(
           return (
             rect.width > 0 &&
             rect.height > 0 &&
-            style.display !== 'none' &&
-            style.visibility !== 'hidden' &&
-            style.opacity !== '0'
+            style.display !==
+              'none' &&
+            style.visibility !==
+              'hidden'
           );
         }
 
 
-        function getInfo(element) {
+        function getInfo(
+          element
+        ) {
 
           const rect =
-            element.getBoundingClientRect();
+            element
+              .getBoundingClientRect();
 
 
           return {
-
-            tag:
-              element.tagName,
 
             aria:
               element.getAttribute(
                 'aria-label'
               ),
 
-            placeholder:
-              element.getAttribute(
-                'placeholder'
-              ) ||
-              element.getAttribute(
-                'data-placeholder'
-              ),
-
-            role:
-              element.getAttribute(
-                'role'
-              ),
-
-            contenteditable:
-              element.getAttribute(
-                'contenteditable'
-              ),
-
             testId:
               element.getAttribute(
                 'data-testid'
-              ),
-
-            dataTab:
-              element.getAttribute(
-                'data-tab'
-              ),
-
-            lexical:
-              element.getAttribute(
-                'data-lexical-editor'
-              ),
-
-            left:
-              Math.round(
-                rect.left
-              ),
-
-            right:
-              Math.round(
-                rect.right
-              ),
-
-            top:
-              Math.round(
-                rect.top
-              ),
-
-            bottom:
-              Math.round(
-                rect.bottom
-              ),
-
-            width:
-              Math.round(
-                rect.width
-              ),
-
-            height:
-              Math.round(
-                rect.height
               ),
 
             text:
@@ -1899,15 +1383,385 @@ async function runChannelUITest(
                 .trim()
                 .slice(
                   0,
-                  200
-                )
+                  250
+                ),
+
+            width:
+              Math.round(
+                rect.width
+              ),
+
+            height:
+              Math.round(
+                rect.height
+              ),
+
+            left:
+              Math.round(
+                rect.left
+              ),
+
+            top:
+              Math.round(
+                rect.top
+              )
           };
         }
 
 
-        /*
-         * Alten Marker entfernen.
-         */
+        document
+          .querySelectorAll(
+            '[data-bot-channel-target]'
+          )
+          .forEach(
+            element =>
+              element.removeAttribute(
+                'data-bot-channel-target'
+              )
+          );
+
+
+        const wanted =
+          normalize(
+            channelName
+          );
+
+
+        const cells =
+          [
+            ...document.querySelectorAll(
+              '[data-testid="newsletter-tab-newsletter-cell"]'
+            )
+          ]
+            .filter(
+              isVisible
+            );
+
+
+        let target =
+          cells.find(
+            element => {
+
+              const text =
+                normalize(
+                  element.textContent
+                );
+
+
+              const aria =
+                normalize(
+                  element.getAttribute(
+                    'aria-label'
+                  )
+                );
+
+
+              return (
+                aria.includes(
+                  wanted
+                ) ||
+                text.includes(
+                  wanted
+                )
+              );
+            }
+          );
+
+
+        if (!target) {
+
+          return {
+            found: false
+          };
+        }
+
+
+        const info =
+          getInfo(
+            target
+          );
+
+
+        if (
+          info.width >
+            700 ||
+          info.height >
+            300 ||
+          info.left >
+            window.innerWidth *
+              0.55
+        ) {
+
+          return {
+            found: false,
+            rejected: info
+          };
+        }
+
+
+        target.setAttribute(
+          'data-bot-channel-target',
+          'true'
+        );
+
+
+        return {
+          found: true,
+          selected: info
+        };
+      },
+
+      CHANNEL_NAME
+    );
+
+
+  console.log(
+    '📺 Kanal-Suche:',
+    channelResult
+  );
+
+
+  if (
+    !channelResult.found
+  ) {
+
+    throw new Error(
+      `Kanal "${CHANNEL_NAME}" wurde nicht sicher gefunden.`
+    );
+  }
+
+
+  const channelHandle =
+    await page.$(
+      '[data-bot-channel-target="true"]'
+    );
+
+
+  if (!channelHandle) {
+
+    throw new Error(
+      'Markierte Kanal-Zelle wurde nicht wiedergefunden.'
+    );
+  }
+
+
+  await channelHandle.evaluate(
+    element => {
+
+      element.scrollIntoView({
+        block: 'center',
+        inline: 'center'
+      });
+    }
+  );
+
+
+  await sleep(
+    700
+  );
+
+
+  const box =
+    await channelHandle.boundingBox();
+
+
+  if (!box) {
+
+    throw new Error(
+      'Keine Klickposition für Kanal verfügbar.'
+    );
+  }
+
+
+  /*
+   * Echter Maus-Klick –
+   * genau diese Variante hat unseren
+   * erfolgreichen BOT-TEST veröffentlicht.
+   */
+
+  await page.mouse.move(
+    box.x +
+      box.width / 2,
+
+    box.y +
+      box.height / 2
+  );
+
+
+  await sleep(
+    300
+  );
+
+
+  await page.mouse.click(
+    box.x +
+      box.width / 2,
+
+    box.y +
+      box.height / 2,
+
+    {
+      delay: 150
+    }
+  );
+
+
+  console.log(
+    `✅ "${CHANNEL_NAME}" angeklickt.`
+  );
+
+
+  await sleep(
+    5000
+  );
+
+
+  await closeWhatsAppPopup(
+    page
+  );
+
+
+  await sleep(
+    2000
+  );
+
+
+  /*
+   * Prüfen, ob die rechte Kanalansicht
+   * tatsächlich gewechselt hat.
+   */
+
+  let channelCheck =
+    await inspectRightChannelArea(
+      page
+    );
+
+
+  console.log(
+    '🔍 Kanalansicht:',
+    channelCheck
+  );
+
+
+  if (
+    channelCheck.emptyState &&
+    !channelCheck.channelNameVisibleRight
+  ) {
+
+    console.log(
+      '🔁 Zweiter Klick auf den Kanal...'
+    );
+
+
+    const secondHandle =
+      await page.$(
+        '[data-bot-channel-target="true"]'
+      );
+
+
+    if (secondHandle) {
+
+      const secondBox =
+        await secondHandle.boundingBox();
+
+
+      if (secondBox) {
+
+        await page.mouse.click(
+          secondBox.x +
+            secondBox.width / 2,
+
+          secondBox.y +
+            secondBox.height / 2,
+
+          {
+            delay: 180
+          }
+        );
+
+
+        await sleep(
+          5000
+        );
+      }
+    }
+
+
+    channelCheck =
+      await inspectRightChannelArea(
+        page
+      );
+  }
+
+
+  if (
+    channelCheck.emptyState &&
+    !channelCheck.channelNameVisibleRight
+  ) {
+
+    throw new Error(
+      `Kanal "${CHANNEL_NAME}" wurde links gefunden, aber rechts nicht geöffnet.`
+    );
+  }
+
+
+  console.log(
+    `✅ Kanal "${CHANNEL_NAME}" ist tatsächlich geöffnet.`
+  );
+
+
+  await sleep(
+    3000
+  );
+}
+
+
+/*
+============================================================
+COMPOSER FINDEN
+============================================================
+*/
+
+async function markComposer(
+  page
+) {
+
+  const result =
+    await page.evaluate(
+      () => {
+
+        function isVisible(
+          element
+        ) {
+
+          if (!element) {
+            return false;
+          }
+
+
+          const rect =
+            element
+              .getBoundingClientRect();
+
+
+          const style =
+            window.getComputedStyle(
+              element
+            );
+
+
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !==
+              'none' &&
+            style.visibility !==
+              'hidden' &&
+            style.opacity !==
+              '0'
+          );
+        }
+
 
         document
           .querySelectorAll(
@@ -1921,195 +1775,66 @@ async function runChannelUITest(
           );
 
 
-        const selectors = [
-
-          '[contenteditable="true"]',
-
-          '[role="textbox"]',
-
-          'textarea',
-
-          'input',
-
-          '[data-lexical-editor="true"]',
-
-          '[data-tab]',
-
-          '[data-testid*="compose"]',
-
-          '[data-testid*="input"]',
-
-          '[data-testid*="newsletter"]',
-
-          '[aria-label*="Meldung"]',
-
-          '[aria-label*="Nachricht"]',
-
-          '[placeholder*="Meldung"]',
-
-          '[data-placeholder*="Meldung"]'
-        ];
-
-
-        const candidates =
-          [
-            ...new Set(
-              [
-                ...document.querySelectorAll(
-                  selectors.join(',')
-                )
-              ]
-            )
-          ]
-            .filter(
-              isVisible
-            );
-
-
         /*
-         * Direkte Bezeichnungen.
+         * Bevorzugt direkt das Feld,
+         * das beim erfolgreichen Test
+         * verwendet wurde.
          */
 
         let target =
-          candidates.find(
-            element => {
-
-              const info =
-                getInfo(
-                  element
-                );
-
-
-              const aria =
-                (
-                  info.aria ||
-                  ''
-                )
-                  .toLowerCase();
-
-
-              const placeholder =
-                (
-                  info.placeholder ||
-                  ''
-                )
-                  .toLowerCase();
-
-
-              const text =
-                (
-                  info.text ||
-                  ''
-                )
-                  .toLowerCase();
-
-
-              return (
-                aria.includes(
-                  'gib eine meldung ein'
-                ) ||
-                aria.includes(
-                  'meldung verfassen'
-                ) ||
-                aria.includes(
-                  'meldung eingeben'
-                ) ||
-                aria.includes(
-                  'nachricht eingeben'
-                ) ||
-                placeholder.includes(
-                  'gib eine meldung ein'
-                ) ||
-                placeholder.includes(
-                  'meldung verfassen'
-                ) ||
-                placeholder.includes(
-                  'meldung eingeben'
-                ) ||
-                placeholder.includes(
-                  'nachricht eingeben'
-                ) ||
-                text ===
-                  'gib eine meldung ein'
-              );
-            }
+          document.querySelector(
+            '[data-testid="conversation-compose-box-input"]'
           );
 
 
-        /*
-         * Falls äußerer Container:
-         * echtes Textfeld innen.
-         */
+        if (
+          target &&
+          !isVisible(
+            target
+          )
+        ) {
 
-        if (target) {
-
-          const inner =
-            target.querySelector?.(
-              [
-                '[contenteditable="true"]',
-                '[role="textbox"]',
-                'textarea',
-                '[data-lexical-editor="true"]'
-              ].join(',')
-            );
-
-
-          if (
-            inner &&
-            isVisible(
-              inner
-            )
-          ) {
-
-            target =
-              inner;
-          }
+          target =
+            null;
         }
 
 
         /*
-         * Rechter Hauptbereich.
+         * Fallback.
          */
 
         if (!target) {
 
-          const editable =
-            candidates.filter(
-              element => {
-
-                const info =
-                  getInfo(
-                    element
-                  );
-
-
-                return (
-                  info.contenteditable ===
-                    'true' ||
-                  info.role ===
-                    'textbox' ||
-                  info.lexical ===
-                    'true' ||
-                  info.tag ===
-                    'TEXTAREA'
-                );
-              }
-            );
+          const candidates =
+            [
+              ...document.querySelectorAll(
+                [
+                  '[contenteditable="true"]',
+                  '[role="textbox"]',
+                  '[data-lexical-editor="true"]',
+                  'textarea'
+                ].join(',')
+              )
+            ]
+              .filter(
+                isVisible
+              );
 
 
           target =
-            editable.find(
+            candidates.find(
               element => {
 
-                const info =
-                  getInfo(
-                    element
-                  );
+                const rect =
+                  element
+                    .getBoundingClientRect();
 
 
                 const aria =
                   (
-                    info.aria ||
+                    element.getAttribute(
+                      'aria-label'
+                    ) ||
                     ''
                   )
                     .toLowerCase();
@@ -2117,7 +1842,12 @@ async function runChannelUITest(
 
                 const placeholder =
                   (
-                    info.placeholder ||
+                    element.getAttribute(
+                      'placeholder'
+                    ) ||
+                    element.getAttribute(
+                      'data-placeholder'
+                    ) ||
                     ''
                   )
                     .toLowerCase();
@@ -2132,159 +1862,22 @@ async function runChannelUITest(
                   );
 
 
-                /*
-                 * Rechts vom Kanal-Drawer.
-                 * Der Drawer endet laut Log ungefähr
-                 * bei x = 474.
-                 */
-
-                const rightSide =
-                  info.left >
-                    500;
-
-
-                const reasonableWidth =
-                  info.width >
-                    100;
-
-
                 return (
                   !search &&
-                  rightSide &&
-                  reasonableWidth
+                  rect.left >
+                    500 &&
+                  rect.width >
+                    100
                 );
               }
             );
         }
 
 
-        /*
-         * Diagnose.
-         */
-
-        const diagnosticSelectors = [
-
-          '[contenteditable]',
-
-          '[role]',
-
-          'input',
-
-          'textarea',
-
-          '[aria-label]',
-
-          '[placeholder]',
-
-          '[data-placeholder]',
-
-          '[data-testid]',
-
-          '[data-tab]',
-
-          '[data-lexical-editor]'
-        ];
-
-
-        const diagnosticElements =
-          [
-            ...new Set(
-              [
-                ...document.querySelectorAll(
-                  diagnosticSelectors.join(',')
-                )
-              ]
-            )
-          ]
-            .filter(
-              isVisible
-            );
-
-
-        const details =
-          diagnosticElements
-            .map(
-              (
-                element,
-                index
-              ) => ({
-                index,
-                ...getInfo(
-                  element
-                )
-              })
-            )
-            .filter(
-              item => {
-
-                const joined =
-                  [
-                    item.aria,
-                    item.placeholder,
-                    item.role,
-                    item.contenteditable,
-                    item.testId,
-                    item.dataTab,
-                    item.lexical,
-                    item.text
-                  ]
-                    .filter(
-                      Boolean
-                    )
-                    .join(
-                      ' '
-                    )
-                    .toLowerCase();
-
-
-                return (
-                  joined.includes(
-                    'meldung'
-                  ) ||
-                  joined.includes(
-                    'nachricht'
-                  ) ||
-                  joined.includes(
-                    'newsletter'
-                  ) ||
-                  joined.includes(
-                    'compose'
-                  ) ||
-                  joined.includes(
-                    'textbox'
-                  ) ||
-                  joined.includes(
-                    'editable'
-                  ) ||
-                  joined.includes(
-                    'suchen'
-                  )
-                );
-              }
-            )
-            .slice(
-              0,
-              120
-            );
-
-
         if (!target) {
 
           return {
-
-            found:
-              false,
-
-            viewport: {
-
-              width:
-                window.innerWidth,
-
-              height:
-                window.innerHeight
-            },
-
-            details
+            found: false
           };
         }
 
@@ -2296,74 +1889,114 @@ async function runChannelUITest(
 
 
         return {
+          found: true,
 
-          found:
-            true,
-
-          viewport: {
-
-            width:
-              window.innerWidth,
-
-            height:
-              window.innerHeight
-          },
-
-          selected:
-            getInfo(
-              target
+          testId:
+            target.getAttribute(
+              'data-testid'
             ),
 
-          details
+          aria:
+            target.getAttribute(
+              'aria-label'
+            )
         };
-      });
-
-
-    console.log(
-      '📝 Composer-Diagnose:',
-      composerInfo
+      }
     );
 
 
+  console.log(
+    '📝 Composer:',
+    result
+  );
+
+
+  if (
+    !result.found
+  ) {
+
+    throw new Error(
+      'Meldungsfeld wurde nicht gefunden.'
+    );
+  }
+}
+
+
+/*
+============================================================
+WHATSAPP-NACHRICHT SENDEN
+============================================================
+*/
+
+async function sendWhatsAppLiveMessage(
+  client
+) {
+
+  if (sendRunning) {
+
+    throw new Error(
+      'WhatsApp-Sendevorgang läuft bereits.'
+    );
+  }
+
+
+  sendRunning =
+    true;
+
+
+  try {
+
+    const state =
+      await client.getState();
+
+
     if (
-      !composerInfo.found
+      state !==
+        'CONNECTED'
     ) {
 
-      console.log(
-        '❌ Meldungsfeld wurde nicht gefunden.'
+      throw new Error(
+        `WhatsApp ist nicht CONNECTED, sondern ${state}.`
       );
+    }
 
 
-      console.log(
-        '➡️ Bitte Screenshot ab "Composer-Diagnose" schicken.'
+    const page =
+      client.pupPage;
+
+
+    if (!page) {
+
+      throw new Error(
+        'Puppeteer-Seite wurde nicht gefunden.'
       );
-
-
-      testStarted =
-        false;
-
-
-      return;
     }
 
 
     console.log(
-      '✅ Meldungsfeld gefunden!'
+      '================================'
     );
 
 
     console.log(
-      '🎯 Ausgewähltes Element:',
-      composerInfo.selected
+      '📤 SENDE LIVE-MELDUNG AN WHATSAPP'
     );
 
 
-    /*
-    ----------------------------------------------------------
-    SCHRITT 5:
-    TEXT EINGEBEN
-    ----------------------------------------------------------
-    */
+    console.log(
+      '================================'
+    );
+
+
+    await openWhatsAppChannel(
+      page
+    );
+
+
+    await markComposer(
+      page
+    );
+
 
     const composer =
       await page.$(
@@ -2373,16 +2006,9 @@ async function runChannelUITest(
 
     if (!composer) {
 
-      console.log(
-        '❌ Markiertes Meldungsfeld konnte nicht erneut gefunden werden.'
+      throw new Error(
+        'Markiertes Meldungsfeld konnte nicht wiedergefunden werden.'
       );
-
-
-      testStarted =
-        false;
-
-
-      return;
     }
 
 
@@ -2413,30 +2039,23 @@ async function runChannelUITest(
 
 
     await page.keyboard.type(
-      TEST_MESSAGE,
+      LIVE_MESSAGE,
+
       {
-        delay:
-          40
+        delay: 30
       }
     );
 
 
     console.log(
-      `⌨️ Text eingegeben: "${TEST_MESSAGE}"`
+      '⌨️ Live-Meldung eingegeben.'
     );
 
 
     await sleep(
-      2000
+      1500
     );
 
-
-    /*
-    ----------------------------------------------------------
-    SCHRITT 6:
-    SENDEN
-    ----------------------------------------------------------
-    */
 
     await page.keyboard.press(
       'Enter'
@@ -2453,87 +2072,354 @@ async function runChannelUITest(
     );
 
 
-    const messageVisible =
+    const visible =
       await page.evaluate(
-        testMessage => {
+        expected => {
 
           return [
             ...document.querySelectorAll(
               '*'
             )
-          ].some(
-            element =>
-              (
-                element.textContent ||
-                ''
-              )
-                .trim() ===
-              testMessage
-          );
+          ]
+            .some(
+              element =>
+                (
+                  element.textContent ||
+                  ''
+                )
+                  .trim() ===
+                expected
+            );
         },
 
-        TEST_MESSAGE
+        LIVE_MESSAGE
       );
 
 
+    if (
+      !visible
+    ) {
+
+      throw new Error(
+        'Live-Meldung wurde nach ENTER nicht eindeutig in WhatsApp gefunden.'
+      );
+    }
+
+
     console.log(
-      messageVisible
-        ?
-        '✅ Testtext ist anschließend in der Oberfläche sichtbar.'
-        :
-        '⚠️ Testtext wurde nach ENTER nicht eindeutig gefunden.'
+      '🎉 LIVE-MELDUNG ERFOLGREICH IM WHATSAPP-KANAL!'
+    );
+
+
+    return true;
+
+  } finally {
+
+    sendRunning =
+      false;
+  }
+}
+
+
+/*
+============================================================
+EINEN LIVE-CHECK AUSFÜHREN
+============================================================
+*/
+
+async function runLiveCheck(
+  client
+) {
+
+  if (
+    liveCheckRunning
+  ) {
+
+    console.log(
+      '⏳ Vorheriger TikTok-Check läuft noch.'
+    );
+
+
+    return;
+  }
+
+
+  liveCheckRunning =
+    true;
+
+
+  try {
+
+    if (
+      !whatsappReady
+    ) {
+
+      console.log(
+        '⏳ WhatsApp ist noch nicht bereit.'
+      );
+
+
+      return;
+    }
+
+
+    let currentLive;
+
+
+    try {
+
+      currentLive =
+        await checkTikTokLive();
+
+    } catch (error) {
+
+      if (
+        error.name ===
+          'TimeoutError'
+      ) {
+
+        console.warn(
+          error.message
+        );
+
+
+        console.warn(
+          '⚠️ Dieser TikTok-Check wird übersprungen.'
+        );
+
+
+        return;
+      }
+
+
+      throw error;
+    }
+
+
+    const oldLive =
+      await getSavedLiveState();
+
+
+    console.log(
+      `🗄️ Gespeicherter TikTok-Status: ${oldLive ? 'LIVE' : 'offline'}`
+    );
+
+
+    /*
+    ----------------------------------------------------------
+    OFFLINE → LIVE
+    ----------------------------------------------------------
+    */
+
+    if (
+      currentLive &&
+      !oldLive
+    ) {
+
+      console.log(
+        '🔴 NEUER LIVE-START ERKANNT!'
+      );
+
+
+      /*
+       * Erst WhatsApp senden.
+       * Nur wenn das klappt, speichern wir LIVE.
+       */
+
+      await sendWhatsAppLiveMessage(
+        client
+      );
+
+
+      await saveLiveState(
+        true
+      );
+
+
+      console.log(
+        '✅ LIVE-Status in MongoDB gespeichert.'
+      );
+
+
+      return;
+    }
+
+
+    /*
+    ----------------------------------------------------------
+    LIVE → LIVE
+    ----------------------------------------------------------
+    */
+
+    if (
+      currentLive &&
+      oldLive
+    ) {
+
+      console.log(
+        '🔴 Jorne ist weiterhin LIVE.'
+      );
+
+
+      console.log(
+        '✅ Keine zweite WhatsApp-Nachricht erforderlich.'
+      );
+
+
+      return;
+    }
+
+
+    /*
+    ----------------------------------------------------------
+    LIVE → OFFLINE
+    ----------------------------------------------------------
+    */
+
+    if (
+      !currentLive &&
+      oldLive
+    ) {
+
+      console.log(
+        '⚫ Jorne ist jetzt OFFLINE.'
+      );
+
+
+      await saveLiveState(
+        false
+      );
+
+
+      console.log(
+        '✅ Status zurückgesetzt.'
+      );
+
+
+      console.log(
+        '➡️ Beim nächsten Live-Start wird wieder eine Nachricht gesendet.'
+      );
+
+
+      return;
+    }
+
+
+    /*
+    ----------------------------------------------------------
+    OFFLINE → OFFLINE
+    ----------------------------------------------------------
+    */
+
+    console.log(
+      '⚫ Jorne ist weiterhin offline.'
     );
 
 
     console.log(
-      '================================'
-    );
-
-
-    console.log(
-      '🎉 UI-SENDEVERSUCH ABGESCHLOSSEN'
-    );
-
-
-    console.log(
-      `➡️ Bitte WhatsApp-Kanal prüfen: "${TEST_MESSAGE}"`
-    );
-
-
-    console.log(
-      '================================'
+      '✅ Keine WhatsApp-Nachricht erforderlich.'
     );
 
   } catch (error) {
 
-    console.log(
-      '================================'
-    );
-
-
     console.error(
-      '❌ FEHLER IM KANAL-UI-TEST'
-    );
-
-
-    console.error(
+      '❌ Fehler beim TikTok-Live-Check:',
       error
     );
 
-
-    console.log(
-      '================================'
-    );
-
-
-    testStarted =
-      false;
-
   } finally {
 
-    testRunning =
+    liveCheckRunning =
       false;
   }
+}
+
+
+/*
+============================================================
+TIKTOK-MONITOR STARTEN
+============================================================
+*/
+
+async function startTikTokMonitor(
+  client
+) {
+
+  if (
+    monitorStarted
+  ) {
+
+    return;
+  }
+
+
+  monitorStarted =
+    true;
+
+
+  console.log(
+    '================================'
+  );
+
+
+  console.log(
+    '👀 TIKTOK-LIVE-MONITOR GESTARTET'
+  );
+
+
+  console.log(
+    `👤 Account: @${TIKTOK_USERNAME}`
+  );
+
+
+  console.log(
+    '⏱️ Prüfung: alle 60 Sekunden'
+  );
+
+
+  console.log(
+    `📢 WhatsApp-Kanal: ${CHANNEL_NAME}`
+  );
+
+
+  console.log(
+    '================================'
+  );
+
+
+  /*
+   * Sofort erster Check.
+   */
+
+  await runLiveCheck(
+    client
+  );
+
+
+  /*
+   * Danach jede Minute.
+   */
+
+  setInterval(
+    () => {
+
+      runLiveCheck(
+        client
+      )
+        .catch(
+          error => {
+
+            console.error(
+              '❌ Intervall-Check fehlgeschlagen:',
+              error
+            );
+          }
+        );
+
+    },
+
+    TIKTOK_CHECK_INTERVAL_MS
+  );
 }
 
 
@@ -2545,11 +2431,39 @@ BOT START
 
 async function startBot() {
 
+  /*
+   * Secrets prüfen.
+   */
+
+  if (
+    !process.env.MONGODB_URI
+  ) {
+
+    throw new Error(
+      'MONGODB_URI fehlt.'
+    );
+  }
+
+
+  if (
+    !process.env.WHATSAPP_PHONE
+  ) {
+
+    throw new Error(
+      'WHATSAPP_PHONE fehlt.'
+    );
+  }
+
+
+  /*
+   * RemoteAuth-Ordner.
+   */
+
   fs.mkdirSync(
     AUTH_DATA_PATH,
+
     {
-      recursive:
-        true
+      recursive: true
     }
   );
 
@@ -2579,6 +2493,10 @@ async function startBot() {
   );
 
 
+  /*
+   * Store.
+   */
+
   const store =
     new FixedMongoStore({
 
@@ -2590,7 +2508,7 @@ async function startBot() {
 
 
   /*
-   * Sitzung prüfen.
+   * Gespeicherte WhatsApp-Sitzung prüfen.
    */
 
   try {
@@ -2604,21 +2522,21 @@ async function startBot() {
 
 
     console.log(
-      '🗄️ Gespeicherte MongoDB-Sitzung vorhanden:',
+      '🗄️ Gespeicherte WhatsApp-Sitzung vorhanden:',
       exists
     );
 
   } catch (error) {
 
     console.log(
-      '⚠️ MongoDB-Sitzungsstatus konnte nicht geprüft werden:',
+      '⚠️ Sitzungsstatus konnte nicht geprüft werden:',
       error.message
     );
   }
 
 
   /*
-   * Client.
+   * WhatsApp-Client.
    */
 
   const client =
@@ -2686,13 +2604,14 @@ async function startBot() {
 
   /*
   ------------------------------------------------------------
-  EVENTS
+  WHATSAPP EVENTS
   ------------------------------------------------------------
   */
 
 
   client.on(
     'code',
+
     code => {
 
       console.log(
@@ -2719,6 +2638,7 @@ async function startBot() {
 
   client.on(
     'authenticated',
+
     () => {
 
       console.log(
@@ -2730,6 +2650,7 @@ async function startBot() {
 
   client.on(
     'ready',
+
     async () => {
 
       console.log(
@@ -2737,6 +2658,10 @@ async function startBot() {
       );
 
 
+      /*
+       * WhatsApp nach READY fertig laden lassen.
+       */
+
       await sleep(
         7000
       );
@@ -2749,61 +2674,41 @@ async function startBot() {
 
 
         console.log(
-          '📡 Status nach READY:',
+          '📡 WhatsApp-Status nach READY:',
           state
         );
 
 
         if (
           state ===
-          'CONNECTED'
+            'CONNECTED'
         ) {
 
-          await runChannelUITest(
-            client,
-            'READY-Event'
+          whatsappReady =
+            true;
+
+
+          console.log(
+            '✅ WhatsApp-Bot ist bereit.'
           );
 
 
-          return;
-        }
+          await startTikTokMonitor(
+            client
+          );
 
-      } catch {}
+        } else {
 
-
-      await sleep(
-        7000
-      );
-
-
-      try {
-
-        const state =
-          await client.getState();
-
-
-        console.log(
-          '📡 Status nach zusätzlicher Wartezeit:',
-          state
-        );
-
-
-        if (
-          state ===
-          'CONNECTED'
-        ) {
-
-          await runChannelUITest(
-            client,
-            'READY + Wartezeit'
+          console.log(
+            '⏳ WhatsApp ist noch nicht CONNECTED.'
           );
         }
 
       } catch (error) {
 
-        console.log(
-          '⚠️ Status nach READY konnte nicht geprüft werden:',
-          error.message
+        console.error(
+          '❌ READY-Prüfung fehlgeschlagen:',
+          error
         );
       }
     }
@@ -2812,6 +2717,7 @@ async function startBot() {
 
   client.on(
     'change_state',
+
     state => {
 
       console.log(
@@ -2822,31 +2728,48 @@ async function startBot() {
 
       if (
         state ===
-          'CONNECTED' &&
-        !testStarted &&
-        !testRunning
+          'CONNECTED'
       ) {
 
-        setTimeout(
-          () => {
+        whatsappReady =
+          true;
 
-            runChannelUITest(
-              client,
-              'change_state = CONNECTED'
-            )
-              .catch(
-                error => {
 
-                  console.error(
-                    '❌ CONNECTED-Test fehlgeschlagen:',
-                    error
-                  );
-                }
-              );
-          },
+        /*
+         * Falls READY nicht sauber kam,
+         * trotzdem Monitor starten.
+         */
 
-          5000
-        );
+        if (
+          !monitorStarted
+        ) {
+
+          setTimeout(
+            () => {
+
+              startTikTokMonitor(
+                client
+              )
+                .catch(
+                  error => {
+
+                    console.error(
+                      '❌ TikTok-Monitor konnte nicht gestartet werden:',
+                      error
+                    );
+                  }
+                );
+
+            },
+
+            5000
+          );
+        }
+
+      } else {
+
+        whatsappReady =
+          false;
       }
     }
   );
@@ -2854,6 +2777,7 @@ async function startBot() {
 
   client.on(
     'remote_session_saved',
+
     () => {
 
       console.log(
@@ -2865,7 +2789,12 @@ async function startBot() {
 
   client.on(
     'auth_failure',
+
     message => {
+
+      whatsappReady =
+        false;
+
 
       console.error(
         '❌ WhatsApp-Anmeldung fehlgeschlagen:',
@@ -2877,7 +2806,12 @@ async function startBot() {
 
   client.on(
     'disconnected',
+
     reason => {
+
+      whatsappReady =
+        false;
+
 
       console.log(
         '⚠️ WhatsApp getrennt:',
@@ -2888,60 +2822,7 @@ async function startBot() {
 
 
   /*
-  ------------------------------------------------------------
-  60-SEKUNDEN-SICHERHEITSNETZ
-  ------------------------------------------------------------
-  */
-
-  setTimeout(
-    async () => {
-
-      if (
-        testStarted ||
-        testRunning
-      ) {
-        return;
-      }
-
-
-      try {
-
-        const state =
-          await client.getState();
-
-
-        console.log(
-          '⏰ 60-SEKUNDEN-STATUS:',
-          state
-        );
-
-
-        if (
-          state ===
-          'CONNECTED'
-        ) {
-
-          await runChannelUITest(
-            client,
-            '60-Sekunden-CONNECTED'
-          );
-        }
-
-      } catch (error) {
-
-        console.error(
-          '❌ 60-Sekunden-Prüfung fehlgeschlagen:',
-          error
-        );
-      }
-    },
-
-    60000
-  );
-
-
-  /*
-   * Start.
+   * WhatsApp starten.
    */
 
   console.log(
@@ -2959,21 +2840,22 @@ START
 ============================================================
 */
 
-startBot().catch(
-  error => {
+startBot()
+  .catch(
+    error => {
 
-    console.error(
-      '❌ STARTFEHLER:'
-    );
-
-
-    console.error(
-      error
-    );
+      console.error(
+        '❌ STARTFEHLER:'
+      );
 
 
-    process.exit(
-      1
-    );
-  }
-);
+      console.error(
+        error
+      );
+
+
+      process.exit(
+        1
+      );
+    }
+  );
