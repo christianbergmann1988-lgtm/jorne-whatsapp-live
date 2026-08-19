@@ -5,32 +5,21 @@ const mongoose = require('mongoose');
 const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
-const CHANNEL_INVITE_CODE = '0029Vb9AGcELikg6ValudB0f';
 const CHANNEL_NAME = 'Jorne_L1ve';
-const TEST_MESSAGE = 'BOT-TEST AUTOMATISCH 3';
+const TEST_MESSAGE = 'BOT-TEST AUTOMATISCH UI';
 
-const AUTH_DATA_PATH = path.resolve('./.wwebjs_auth');
 const CLIENT_ID = 'jorne-whatsapp-live';
+const AUTH_DATA_PATH = path.resolve('./.wwebjs_auth');
 
-let channelTestStarted = false;
+let testStarted = false;
 
 
 /*
- * ============================================================
- * FIX FÜR whatsapp-web.js 1.34.7 + wwebjs-mongo
- * ============================================================
- *
- * RemoteAuth 1.34.7 legt seine ZIP unter dataPath ab.
- *
- * wwebjs-mongo 1.1.0 sucht beim Speichern dagegen normalerweise:
- *
- *   RemoteAuth-xxxx.zip
- *
- * direkt im aktuellen Arbeitsordner.
- *
- * Dieser Store verwendet stattdessen den tatsächlichen
- * RemoteAuth-Pfad.
- */
+============================================================
+FIX FÜR REMOTEAUTH + MONGODB
+============================================================
+*/
+
 class FixedMongoStore extends MongoStore {
   constructor({ mongoose, dataPath }) {
     super({ mongoose });
@@ -82,10 +71,6 @@ class FixedMongoStore extends MongoStore {
       readStream.pipe(uploadStream);
     });
 
-    /*
-     * Alte Sicherungen entfernen.
-     * Die neueste bleibt erhalten.
-     */
     const documents = await bucket
       .find({
         filename: `${session}.zip`
@@ -94,12 +79,12 @@ class FixedMongoStore extends MongoStore {
       .toArray();
 
     if (documents.length > 1) {
-      for (const oldDocument of documents.slice(1)) {
+      for (const document of documents.slice(1)) {
         try {
-          await bucket.delete(oldDocument._id);
+          await bucket.delete(document._id);
         } catch (error) {
           console.log(
-            '⚠️ Alte MongoDB-Sicherung konnte nicht gelöscht werden:',
+            '⚠️ Alte Sicherung konnte nicht gelöscht werden:',
             error.message
           );
         }
@@ -114,20 +99,31 @@ class FixedMongoStore extends MongoStore {
 
 
 /*
- * ============================================================
- * KANAL-TEST
- * ============================================================
- */
+============================================================
+KLEINE WARTEFUNKTION
+============================================================
+*/
 
-async function runChannelTest(client, reason) {
-  if (channelTestStarted) {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+
+/*
+============================================================
+KANAL DIREKT ÜBER WHATSAPP-WEB-OBERFLÄCHE ÖFFNEN
+============================================================
+*/
+
+async function runChannelUITest(client, reason) {
+  if (testStarted) {
     return;
   }
 
-  channelTestStarted = true;
+  testStarted = true;
 
   console.log('================================');
-  console.log('🚀 STARTE KANAL-TEST');
+  console.log('🚀 STARTE WHATSAPP-KANAL-UI-TEST');
   console.log('Auslöser:', reason);
   console.log('================================');
 
@@ -135,284 +131,598 @@ async function runChannelTest(client, reason) {
     const state = await client.getState();
 
     console.log(
-      '📡 WhatsApp-Verbindungsstatus:',
+      '📡 WhatsApp-Status:',
       state
     );
 
     if (state !== 'CONNECTED') {
       console.log(
-        '❌ WhatsApp ist noch nicht CONNECTED.'
+        '❌ WhatsApp ist nicht CONNECTED.'
       );
 
-      channelTestStarted = false;
+      testStarted = false;
       return;
     }
 
-    console.log('✅ WhatsApp ist CONNECTED.');
+    const page = client.pupPage;
 
-    try {
-      const webVersion =
-        await client.getWWebVersion();
-
+    if (!page) {
       console.log(
-        '📦 WhatsApp-Web-Version:',
-        webVersion
+        '❌ Puppeteer-Seite wurde nicht gefunden.'
       );
-    } catch (error) {
-      console.log(
-        '⚠️ Web-Version konnte nicht gelesen werden.'
-      );
-    }
 
-    console.log('--------------------------------');
-    console.log(
-      '🔍 Prüfe Channel-Funktionen...'
-    );
-
-    console.log(
-      'getChannelByInviteCode:',
-      typeof client.getChannelByInviteCode
-    );
-
-    console.log(
-      'getChannels:',
-      typeof client.getChannels
-    );
-
-    console.log('--------------------------------');
-
-
-    /*
-     * --------------------------------------------------------
-     * WEG 1:
-     * Kanal über Einladungs-Code laden.
-     * --------------------------------------------------------
-     */
-
-    if (
-      typeof client.getChannelByInviteCode ===
-      'function'
-    ) {
-      try {
-        console.log(
-          `🔎 Suche "${CHANNEL_NAME}" über den Kanal-Link...`
-        );
-
-        const channel =
-          await client.getChannelByInviteCode(
-            CHANNEL_INVITE_CODE
-          );
-
-        if (channel) {
-          console.log('================================');
-          console.log('🎯 KANAL GEFUNDEN!');
-
-          console.log(
-            'Name:',
-            channel.name || 'unbekannt'
-          );
-
-          console.log(
-            'ID:',
-            channel.id?._serialized ||
-              channel.id ||
-              'unbekannt'
-          );
-
-          console.log(
-            'sendMessage:',
-            typeof channel.sendMessage
-          );
-
-          console.log('================================');
-
-          if (
-            typeof channel.sendMessage ===
-            'function'
-          ) {
-            console.log(
-              `📤 Sende Testnachricht: "${TEST_MESSAGE}"`
-            );
-
-            const result =
-              await channel.sendMessage(
-                TEST_MESSAGE
-              );
-
-            console.log('================================');
-            console.log(
-              '🎉 TESTNACHRICHT GESENDET!'
-            );
-
-            console.log(
-              'Nachrichten-ID:',
-              result?.id?._serialized ||
-                'nicht verfügbar'
-            );
-
-            console.log('================================');
-
-            return;
-          }
-        } else {
-          console.log(
-            '⚠️ getChannelByInviteCode lieferte keinen Kanal.'
-          );
-        }
-
-      } catch (error) {
-        console.log(
-          '⚠️ Direkte Kanalsuche über Invite-Code fehlgeschlagen.'
-        );
-
-        console.log(
-          'Fehler:',
-          error?.message || error
-        );
-      }
+      return;
     }
 
 
     /*
-     * --------------------------------------------------------
-     * WEG 2:
-     * gecachte Kanäle versuchen.
-     * --------------------------------------------------------
-     */
+    ----------------------------------------------------------
+    SCHRITT 1 – Bereich "Kanäle" öffnen
+    ----------------------------------------------------------
+    */
 
-    if (
-      typeof client.getChannels ===
-      'function'
-    ) {
-      try {
-        console.log(
-          '🔎 Versuche getChannels()...'
-        );
+    console.log(
+      '🔎 Suche Bereich "Kanäle"...'
+    );
 
-        const channels =
-          await client.getChannels();
+    const channelAreaOpened =
+      await page.evaluate(() => {
 
-        console.log(
-          '📺 Gefundene Kanäle:',
-          channels.length
-        );
-
-        for (
-          let i = 0;
-          i < channels.length;
-          i++
-        ) {
-          const channel = channels[i];
-
-          console.log(
-            `Kanal ${i + 1}:`,
-            channel.name || 'ohne Name',
-            '| ID:',
-            channel.id?._serialized ||
-              channel.id ||
-              'unbekannt'
-          );
-        }
+        const elements =
+          [...document.querySelectorAll('*')];
 
         const target =
-          channels.find(
-            channel =>
-              channel.name === CHANNEL_NAME
-          );
+          elements.find(element => {
 
-        if (target) {
-          console.log('================================');
-          console.log(
-            `🎯 ${CHANNEL_NAME} über getChannels() gefunden!`
-          );
+            const aria =
+              element
+                .getAttribute('aria-label')
+                ?.trim();
 
-          console.log(
-            'ID:',
-            target.id?._serialized ||
-              target.id ||
-              'unbekannt'
-          );
+            const text =
+              element.textContent?.trim();
 
-          console.log(
-            'sendMessage:',
-            typeof target.sendMessage
-          );
-
-          console.log('================================');
-
-          if (
-            typeof target.sendMessage ===
-            'function'
-          ) {
-            console.log(
-              `📤 Sende Testnachricht: "${TEST_MESSAGE}"`
+            return (
+              aria === 'Kanäle' ||
+              text === 'Kanäle'
             );
+          });
 
-            const result =
-              await target.sendMessage(
-                TEST_MESSAGE
-              );
-
-            console.log('================================');
-            console.log(
-              '🎉 TESTNACHRICHT GESENDET!'
-            );
-
-            console.log(
-              'Nachrichten-ID:',
-              result?.id?._serialized ||
-                'nicht verfügbar'
-            );
-
-            console.log('================================');
-
-            return;
-          }
+        if (!target) {
+          return false;
         }
 
-      } catch (error) {
-        console.log(
-          '⚠️ getChannels() ist fehlgeschlagen.'
+        const clickable =
+          target.closest(
+            'button,[role="button"],[tabindex]'
+          ) || target;
+
+        clickable.click();
+
+        return true;
+      });
+
+
+    console.log(
+      channelAreaOpened
+        ? '✅ Bereich "Kanäle" angeklickt.'
+        : '⚠️ Bereich "Kanäle" nicht direkt gefunden.'
+    );
+
+
+    await sleep(4000);
+
+
+    /*
+    ----------------------------------------------------------
+    SCHRITT 2 – Jorne_L1ve öffnen
+    ----------------------------------------------------------
+    */
+
+    console.log(
+      `🔎 Suche Kanal "${CHANNEL_NAME}"...`
+    );
+
+
+    const channelOpened =
+      await page.evaluate(
+        channelName => {
+
+          /*
+           * Bevorzugt den bereits von unserer Diagnose
+           * gefundenen WhatsApp-TestID.
+           */
+
+          const channelCells =
+            [
+              ...document.querySelectorAll(
+                '[data-testid="newsletter-tab-newsletter-cell"]'
+              )
+            ];
+
+          let target =
+            channelCells.find(element =>
+              element.textContent
+                ?.includes(channelName)
+            );
+
+
+          /*
+           * Falls WhatsApp den TestID ändert:
+           * über sichtbaren Text suchen.
+           */
+
+          if (!target) {
+            const elements =
+              [...document.querySelectorAll('*')];
+
+            target =
+              elements.find(element => {
+
+                const text =
+                  element.textContent?.trim();
+
+                const aria =
+                  element
+                    .getAttribute('aria-label')
+                    ?.trim();
+
+                return (
+                  text === channelName ||
+                  aria === `Kanal ${channelName}`
+                );
+              });
+          }
+
+
+          if (!target) {
+            return false;
+          }
+
+
+          const clickable =
+            target.closest(
+              '[data-testid="newsletter-tab-newsletter-cell"],button,[role="button"],[role="listitem"],[tabindex]'
+            ) || target;
+
+
+          clickable.click();
+
+          return true;
+        },
+
+        CHANNEL_NAME
+      );
+
+
+    if (!channelOpened) {
+      console.log(
+        `❌ Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`
+      );
+
+      return;
+    }
+
+
+    console.log(
+      `✅ Kanal "${CHANNEL_NAME}" wurde geöffnet.`
+    );
+
+
+    await sleep(5000);
+
+
+    /*
+    ----------------------------------------------------------
+    SCHRITT 3 – mögliche Newsletter-ID suchen
+    ----------------------------------------------------------
+    */
+
+    console.log(
+      '🔎 Suche zusätzlich nach einer @newsletter-ID...'
+    );
+
+
+    const newsletterInfo =
+      await page.evaluate(() => {
+
+        const ids =
+          new Set();
+
+
+        /*
+         * DOM durchsuchen
+         */
+
+        const html =
+          document.documentElement.innerHTML;
+
+        const matches =
+          html.match(
+            /\d{8,30}@newsletter/g
+          ) || [];
+
+        matches.forEach(id =>
+          ids.add(id)
         );
 
-        console.log(
-          'Fehler:',
-          error?.message || error
+
+        /*
+         * WhatsApp Store durchsuchen
+         */
+
+        try {
+          const collection =
+            window.Store?.NewsletterCollection;
+
+          const models =
+            collection?.models || [];
+
+          for (const model of models) {
+
+            let id = null;
+
+            try {
+              id =
+                model?.id?._serialized ||
+                model?.id?.toString?.() ||
+                null;
+            } catch {}
+
+            if (
+              id &&
+              String(id).includes(
+                '@newsletter'
+              )
+            ) {
+              ids.add(
+                String(id)
+              );
+            }
+          }
+        } catch {}
+
+
+        return [...ids];
+      });
+
+
+    console.log(
+      '📺 Gefundene Newsletter-IDs:',
+      newsletterInfo
+    );
+
+
+    /*
+    ----------------------------------------------------------
+    SCHRITT 4 – Meldungsfeld suchen
+    ----------------------------------------------------------
+    */
+
+    console.log(
+      '🔎 Suche Meldungs-Eingabefeld...'
+    );
+
+
+    const composerInfo =
+      await page.evaluate(() => {
+
+        const candidates =
+          [
+            ...document.querySelectorAll(
+              [
+                '[contenteditable="true"]',
+                '[role="textbox"]',
+                'textarea',
+                'input'
+              ].join(',')
+            )
+          ];
+
+
+        const visible =
+          candidates.filter(element => {
+
+            const rect =
+              element.getBoundingClientRect();
+
+            return (
+              rect.width > 0 &&
+              rect.height > 0
+            );
+          });
+
+
+        const details =
+          visible.map(
+            (element, index) => ({
+
+              index,
+
+              tag:
+                element.tagName,
+
+              aria:
+                element.getAttribute(
+                  'aria-label'
+                ),
+
+              placeholder:
+                element.getAttribute(
+                  'placeholder'
+                ) ||
+                element.getAttribute(
+                  'data-placeholder'
+                ),
+
+              role:
+                element.getAttribute(
+                  'role'
+                ),
+
+              contenteditable:
+                element.getAttribute(
+                  'contenteditable'
+                ),
+
+              text:
+                (
+                  element.textContent ||
+                  ''
+                )
+                  .trim()
+                  .slice(0, 100)
+            })
+          );
+
+
+        /*
+         * Suche zuerst explizit nach
+         * "Meldung", "Nachricht" etc.
+         */
+
+        let target =
+          visible.find(element => {
+
+            const aria =
+              (
+                element.getAttribute(
+                  'aria-label'
+                ) || ''
+              ).toLowerCase();
+
+            const placeholder =
+              (
+                element.getAttribute(
+                  'placeholder'
+                ) ||
+                element.getAttribute(
+                  'data-placeholder'
+                ) ||
+                ''
+              ).toLowerCase();
+
+            return (
+              aria.includes('meldung') ||
+              aria.includes('nachricht') ||
+              placeholder.includes('meldung') ||
+              placeholder.includes('nachricht')
+            );
+          });
+
+
+        /*
+         * Falls WhatsApp keine passende Beschriftung liefert:
+         * sichtbares ContentEditable nehmen,
+         * aber Suchfelder ausschließen.
+         */
+
+        if (!target) {
+
+          target =
+            visible.find(element => {
+
+              if (
+                element.getAttribute(
+                  'contenteditable'
+                ) !== 'true'
+              ) {
+                return false;
+              }
+
+
+              const aria =
+                (
+                  element.getAttribute(
+                    'aria-label'
+                  ) || ''
+                ).toLowerCase();
+
+
+              const placeholder =
+                (
+                  element.getAttribute(
+                    'placeholder'
+                  ) ||
+                  element.getAttribute(
+                    'data-placeholder'
+                  ) ||
+                  ''
+                ).toLowerCase();
+
+
+              return (
+                !aria.includes('suchen') &&
+                !placeholder.includes('suchen')
+              );
+            });
+        }
+
+
+        if (!target) {
+          return {
+            found: false,
+            details
+          };
+        }
+
+
+        target.setAttribute(
+          'data-bot-composer',
+          'true'
         );
-      }
+
+
+        return {
+          found: true,
+
+          tag:
+            target.tagName,
+
+          aria:
+            target.getAttribute(
+              'aria-label'
+            ),
+
+          placeholder:
+            target.getAttribute(
+              'placeholder'
+            ) ||
+            target.getAttribute(
+              'data-placeholder'
+            ),
+
+          role:
+            target.getAttribute(
+              'role'
+            ),
+
+          contenteditable:
+            target.getAttribute(
+              'contenteditable'
+            ),
+
+          details
+        };
+      });
+
+
+    console.log(
+      '📝 Composer-Diagnose:',
+      composerInfo
+    );
+
+
+    if (!composerInfo.found) {
+      console.log(
+        '❌ Meldungsfeld wurde noch nicht gefunden.'
+      );
+
+      console.log(
+        '➡️ Bitte Screenshot vom Abschnitt "Composer-Diagnose" schicken.'
+      );
+
+      return;
     }
+
+
+    console.log(
+      '✅ Meldungsfeld gefunden!'
+    );
+
+
+    /*
+    ----------------------------------------------------------
+    SCHRITT 5 – TESTNACHRICHT EINGEBEN
+    ----------------------------------------------------------
+    */
+
+    const composer =
+      await page.$(
+        '[data-bot-composer="true"]'
+      );
+
+
+    if (!composer) {
+      console.log(
+        '❌ Gefundenes Meldungsfeld konnte nicht ausgewählt werden.'
+      );
+
+      return;
+    }
+
+
+    await composer.click();
+
+
+    await page.keyboard.type(
+      TEST_MESSAGE,
+      {
+        delay: 35
+      }
+    );
+
+
+    console.log(
+      `⌨️ Text eingegeben: "${TEST_MESSAGE}"`
+    );
+
+
+    await sleep(1500);
+
+
+    /*
+    ----------------------------------------------------------
+    SCHRITT 6 – ENTER DRÜCKEN
+    ----------------------------------------------------------
+    */
+
+    await page.keyboard.press(
+      'Enter'
+    );
+
+
+    console.log(
+      '📤 ENTER gedrückt.'
+    );
+
+
+    await sleep(3000);
+
 
     console.log('================================');
     console.log(
-      '⚠️ Kanal konnte über die aktuelle API noch nicht erfolgreich angesprochen werden.'
+      '🎉 UI-SENDEVERSUCH ABGESCHLOSSEN'
+    );
+    console.log(
+      `➡️ Prüfe jetzt im Kanal, ob "${TEST_MESSAGE}" erschienen ist.`
     );
     console.log('================================');
 
+
   } catch (error) {
+
     console.log('================================');
+
     console.error(
-      '❌ Fehler beim Kanal-Test:'
+      '❌ FEHLER IM KANAL-UI-TEST'
     );
+
     console.error(error);
+
     console.log('================================');
   }
 }
 
 
 /*
- * ============================================================
- * BOT STARTEN
- * ============================================================
- */
+============================================================
+BOT START
+============================================================
+*/
 
 async function startBot() {
-  /*
-   * Auf jedem frischen GitHub-Runner existiert dieser
-   * Ordner zunächst nicht.
-   *
-   * RemoteAuth 1.34.7 erwartet ihn beim Wiederherstellen
-   * der MongoDB-Sitzung.
-   */
+
   fs.mkdirSync(
     AUTH_DATA_PATH,
     {
@@ -420,18 +730,22 @@ async function startBot() {
     }
   );
 
+
   console.log(
     '📁 RemoteAuth-Ordner bereit:',
     AUTH_DATA_PATH
   );
 
+
   console.log(
     'Verbinde mit MongoDB...'
   );
 
+
   await mongoose.connect(
     process.env.MONGODB_URI
   );
+
 
   console.log(
     '✅ MongoDB verbunden.'
@@ -441,27 +755,27 @@ async function startBot() {
   const store =
     new FixedMongoStore({
       mongoose,
-      dataPath: AUTH_DATA_PATH
+      dataPath:
+        AUTH_DATA_PATH
     });
 
 
-  /*
-   * Nur Diagnose:
-   * Wir prüfen, ob MongoDB bereits eine Sitzung besitzt.
-   */
-
   try {
-    const sessionExists =
+
+    const exists =
       await store.sessionExists({
         session:
           `RemoteAuth-${CLIENT_ID}`
       });
 
+
     console.log(
       '🗄️ Gespeicherte MongoDB-Sitzung vorhanden:',
-      sessionExists
+      exists
     );
+
   } catch (error) {
+
     console.log(
       '⚠️ MongoDB-Sitzungsstatus konnte nicht geprüft werden:',
       error.message
@@ -469,54 +783,59 @@ async function startBot() {
   }
 
 
-  const client = new Client({
-    authStrategy: new RemoteAuth({
-      clientId: CLIENT_ID,
+  const client =
+    new Client({
 
-      store,
+      authStrategy:
+        new RemoteAuth({
 
-      dataPath:
-        AUTH_DATA_PATH,
+          clientId:
+            CLIENT_ID,
 
-      backupSyncIntervalMs:
-        60000,
+          store,
 
-      rmMaxRetries:
-        10
-    }),
+          dataPath:
+            AUTH_DATA_PATH,
 
-    pairWithPhoneNumber: {
-      phoneNumber:
-        process.env.WHATSAPP_PHONE,
+          backupSyncIntervalMs:
+            60000,
 
-      showNotification:
-        true,
-
-      intervalMs:
-        180000
-    },
-
-    puppeteer: {
-      headless: true,
-
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage'
-      ]
-    }
-  });
+          rmMaxRetries:
+            10
+        }),
 
 
-  /*
-   * ========================================================
-   * EVENTS
-   * ========================================================
-   */
+      pairWithPhoneNumber: {
+
+        phoneNumber:
+          process.env.WHATSAPP_PHONE,
+
+        showNotification:
+          true,
+
+        intervalMs:
+          180000
+      },
+
+
+      puppeteer: {
+
+        headless:
+          true,
+
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage'
+        ]
+      }
+    });
+
 
   client.on(
     'code',
     code => {
+
       console.log('================================');
       console.log(
         '📱 WHATSAPP KOPPLUNGSCODE:'
@@ -530,6 +849,7 @@ async function startBot() {
   client.on(
     'authenticated',
     () => {
+
       console.log(
         '✅ WhatsApp erfolgreich angemeldet.'
       );
@@ -538,10 +858,43 @@ async function startBot() {
 
 
   client.on(
+    'ready',
+    async () => {
+
+      console.log(
+        '✅ WhatsApp READY-Event erhalten.'
+      );
+
+
+      await sleep(5000);
+
+
+      await runChannelUITest(
+        client,
+        'READY-Event'
+      );
+    }
+  );
+
+
+  client.on(
+    'change_state',
+    state => {
+
+      console.log(
+        '🔄 WhatsApp Statusänderung:',
+        state
+      );
+    }
+  );
+
+
+  client.on(
     'remote_session_saved',
     () => {
+
       console.log(
-        '💾 REMOTE SESSION SAVED wurde ausgelöst.'
+        '💾 REMOTE SESSION SAVED.'
       );
     }
   );
@@ -550,6 +903,7 @@ async function startBot() {
   client.on(
     'auth_failure',
     message => {
+
       console.error(
         '❌ WhatsApp-Anmeldung fehlgeschlagen:',
         message
@@ -561,6 +915,7 @@ async function startBot() {
   client.on(
     'disconnected',
     reason => {
+
       console.log(
         '⚠️ WhatsApp getrennt:',
         reason
@@ -569,93 +924,49 @@ async function startBot() {
   );
 
 
-  client.on(
-    'change_state',
-    state => {
-      console.log(
-        '🔄 WhatsApp Statusänderung:',
-        state
-      );
-
-      if (
-        state === 'CONNECTED'
-      ) {
-        setTimeout(
-          () => {
-            runChannelTest(
-              client,
-              'change_state = CONNECTED'
-            );
-          },
-          5000
-        );
-      }
-    }
-  );
-
-
-  client.on(
-    'ready',
-    async () => {
-      console.log(
-        '✅ WhatsApp READY-Event erhalten.'
-      );
-
-      await runChannelTest(
-        client,
-        'READY-Event'
-      );
-    }
-  );
-
-
   /*
-   * Sicherheitsnetz:
-   *
-   * Bei dir kam READY teilweise nicht,
-   * obwohl getState() bereits CONNECTED meldete.
+   * Falls READY einmal wieder nicht kommt,
+   * versuchen wir es nach 60 Sekunden bei CONNECTED.
    */
 
   setTimeout(
     async () => {
-      if (
-        channelTestStarted
-      ) {
+
+      if (testStarted) {
         return;
       }
 
       try {
+
         const state =
           await client.getState();
 
-        console.log('================================');
-        console.log(
-          '⏰ 60-SEKUNDEN-CHECK'
-        );
 
         console.log(
-          '📡 Aktueller Status:',
+          '⏰ 60-Sekunden-Status:',
           state
         );
 
-        console.log('================================');
 
         if (
           state === 'CONNECTED'
         ) {
-          await runChannelTest(
+
+          await runChannelUITest(
             client,
-            '60-Sekunden-Check = CONNECTED'
+            '60-Sekunden-CONNECTED'
           );
         }
 
       } catch (error) {
+
         console.error(
-          '❌ 60-Sekunden-Statusprüfung fehlgeschlagen:',
+          '❌ 60-Sekunden-Prüfung fehlgeschlagen:',
           error
         );
       }
     },
+
     60000
   );
 
@@ -664,18 +975,20 @@ async function startBot() {
     '🚀 WhatsApp wird gestartet...'
   );
 
+
   await client.initialize();
 }
 
 
 /*
- * ============================================================
- * START
- * ============================================================
- */
+============================================================
+START
+============================================================
+*/
 
 startBot().catch(
   error => {
+
     console.error(
       '❌ STARTFEHLER:'
     );
