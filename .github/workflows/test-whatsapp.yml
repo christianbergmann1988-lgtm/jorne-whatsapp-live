@@ -19,6 +19,9 @@ jobs:
       - name: Pakete installieren
         run: npm install
 
+      - name: Chrome für Puppeteer installieren
+        run: npx puppeteer browsers install
+
       - name: Bot starten
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
