@@ -26,25 +26,14 @@ const CLIENT_ID = 'jorne-whatsapp-live';
 const AUTH_DATA_PATH =
   path.resolve('./.wwebjs_auth');
 
-const TIKTOK_CHECK_INTERVAL_MS =
-  60 * 1000;
+const TIKTOK_TIMEOUT_MS = 20000;
 
-const TIKTOK_TIMEOUT_MS =
-  20 * 1000;
-
-
-let whatsappReady = false;
-
-let liveCheckRunning = false;
-
-let monitorStarted = false;
-
-let sendRunning = false;
+const WHATSAPP_READY_TIMEOUT_MS = 90000;
 
 
 /*
 ============================================================
-MONGODB LIVE-STATUS
+MONGODB: TIKTOK-STATUS
 ============================================================
 */
 
@@ -74,6 +63,7 @@ const TikTokStateSchema =
 
 
 const TikTokState =
+  mongoose.models.TikTokState ||
   mongoose.model(
     'TikTokState',
     TikTokStateSchema
@@ -85,40 +75,34 @@ async function getSavedLiveState() {
   const state =
     await TikTokState
       .findOne({
-        username:
-          TIKTOK_USERNAME
+        username: TIKTOK_USERNAME
       })
       .lean();
 
 
-  if (!state) {
-    return false;
-  }
-
-
   return Boolean(
-    state.live
+    state?.live
   );
 }
 
 
-async function saveLiveState(
-  live
-) {
+/*
+============================================================
+OFFLINE SPEICHERN
+============================================================
+*/
+
+async function setOfflineState() {
 
   await TikTokState.updateOne(
     {
-      username:
-        TIKTOK_USERNAME
+      username: TIKTOK_USERNAME
     },
 
     {
       $set: {
-        live:
-          Boolean(live),
-
-        changedAt:
-          new Date()
+        live: false,
+        changedAt: new Date()
       }
     },
 
@@ -131,12 +115,107 @@ async function saveLiveState(
 
 /*
 ============================================================
+LIVE-START ATOMAR RESERVIEREN
+
+Verhindert möglichst, dass zwei gleichzeitig gestartete
+GitHub-Runs dieselbe LIVE-Meldung doppelt schicken.
+============================================================
+*/
+
+async function claimNewLiveStart() {
+
+  /*
+   * Existierenden OFFLINE-Eintrag auf LIVE setzen.
+   */
+
+  const result =
+    await TikTokState.findOneAndUpdate(
+      {
+        username: TIKTOK_USERNAME,
+        live: false
+      },
+
+      {
+        $set: {
+          live: true,
+          changedAt: new Date()
+        }
+      },
+
+      {
+        new: true
+      }
+    );
+
+
+  if (result) {
+    return true;
+  }
+
+
+  /*
+   * Vielleicht existiert noch gar kein Eintrag.
+   */
+
+  const existing =
+    await TikTokState
+      .findOne({
+        username: TIKTOK_USERNAME
+      })
+      .lean();
+
+
+  if (existing) {
+
+    /*
+     * Bereits LIVE gespeichert.
+     */
+
+    return false;
+  }
+
+
+  /*
+   * Erster Eintrag überhaupt.
+   */
+
+  try {
+
+    await TikTokState.create({
+      username: TIKTOK_USERNAME,
+      live: true,
+      changedAt: new Date()
+    });
+
+
+    return true;
+
+  } catch (error) {
+
+    /*
+     * Falls gleichzeitig ein zweiter Run
+     * denselben Eintrag angelegt hat.
+     */
+
+    if (
+      error?.code === 11000
+    ) {
+      return false;
+    }
+
+
+    throw error;
+  }
+}
+
+
+/*
+============================================================
 REMOTEAUTH + MONGODB FIX
 ============================================================
 */
 
-class FixedMongoStore
-  extends MongoStore {
+class FixedMongoStore extends MongoStore {
 
   constructor({
     mongoose,
@@ -289,7 +368,7 @@ class FixedMongoStore
 
 /*
 ============================================================
-WARTEFUNKTION
+HILFSFUNKTION
 ============================================================
 */
 
@@ -313,7 +392,8 @@ TIMEOUT
 
 function withTimeout(
   promise,
-  milliseconds
+  milliseconds,
+  message
 ) {
 
   let timeout;
@@ -332,7 +412,7 @@ function withTimeout(
 
               const error =
                 new Error(
-                  `TikTok antwortet nach ${milliseconds / 1000} Sekunden nicht.`
+                  message
                 );
 
 
@@ -370,7 +450,7 @@ function withTimeout(
 
 /*
 ============================================================
-TIKTOK LIVE-STATUS ABFRAGEN
+TIKTOK EINMAL PRÜFEN
 ============================================================
 */
 
@@ -378,8 +458,7 @@ async function checkTikTokLive() {
 
   /*
    * tiktok-live-connector wird dynamisch geladen,
-   * damit unser bestehender CommonJS-Code mit
-   * require(...) unverändert funktionieren kann.
+   * weil unsere Datei CommonJS verwendet.
    */
 
   const module =
@@ -416,20 +495,24 @@ async function checkTikTokLive() {
     );
 
 
-    const isLive =
+    const live =
       await withTimeout(
+
         connection.fetchIsLive(),
-        TIKTOK_TIMEOUT_MS
+
+        TIKTOK_TIMEOUT_MS,
+
+        `TikTok antwortet nach ${TIKTOK_TIMEOUT_MS / 1000} Sekunden nicht.`
       );
 
 
     console.log(
-      `📡 TikTok-Status: ${isLive ? 'LIVE 🔴' : 'offline ⚫'}`
+      `📡 TikTok-Status: ${live ? 'LIVE 🔴' : 'offline ⚫'}`
     );
 
 
     return Boolean(
-      isLive
+      live
     );
 
   } finally {
@@ -441,8 +524,7 @@ async function checkTikTokLive() {
     } catch {
 
       /*
-       * Falls keine aktive Verbindung besteht,
-       * gibt es nichts zu trennen.
+       * Keine aktive Verbindung.
        */
     }
   }
@@ -491,10 +573,8 @@ async function closeWhatsAppPopup(
           return (
             rect.width > 0 &&
             rect.height > 0 &&
-            style.display !==
-              'none' &&
-            style.visibility !==
-              'hidden'
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
           );
         }
 
@@ -547,10 +627,9 @@ async function closeWhatsAppPopup(
               ...document.querySelectorAll(
                 '[role="dialog"]'
               )
-            ]
-              .find(
-                isVisible
-              );
+            ].find(
+              isVisible
+            );
         }
 
 
@@ -573,10 +652,9 @@ async function closeWhatsAppPopup(
                 '[aria-label]'
               ].join(',')
             )
-          ]
-            .filter(
-              isVisible
-            );
+          ].filter(
+            isVisible
+          );
 
 
         let closeButton =
@@ -658,18 +736,12 @@ async function closeWhatsAppPopup(
 
 
                 return (
-                  text ===
-                    'ok' ||
-                  text ===
-                    'okay' ||
-                  text ===
-                    'verstanden' ||
-                  text ===
-                    'fertig' ||
-                  text ===
-                    'weiter' ||
-                  text ===
-                    'nicht jetzt'
+                  text === 'ok' ||
+                  text === 'okay' ||
+                  text === 'verstanden' ||
+                  text === 'fertig' ||
+                  text === 'weiter' ||
+                  text === 'nicht jetzt'
                 );
               }
             );
@@ -707,11 +779,6 @@ async function closeWhatsAppPopup(
     result.closed
   ) {
 
-    console.log(
-      '✅ WhatsApp-Popup geschlossen.'
-    );
-
-
     await sleep(
       2000
     );
@@ -735,11 +802,6 @@ async function closeWhatsAppPopup(
 
       await sleep(
         1500
-      );
-
-
-      console.log(
-        '⌨️ ESC zum Schließen des Popups gedrückt.'
       );
 
     } catch {}
@@ -783,10 +845,8 @@ async function inspectRightChannelArea(
         return (
           rect.width > 0 &&
           rect.height > 0 &&
-          style.display !==
-            'none' &&
-          style.visibility !==
-            'hidden'
+          style.display !== 'none' &&
+          style.visibility !== 'hidden'
         );
       }
 
@@ -796,7 +856,28 @@ async function inspectRightChannelArea(
           .toLowerCase();
 
 
-      const elements =
+      const pageText =
+        (
+          document.body?.innerText ||
+          ''
+        )
+          .replace(
+            /\s+/g,
+            ' '
+          )
+          .trim();
+
+
+      const emptyState =
+        pageText.includes(
+          'Kanäle entdecken'
+        ) ||
+        pageText.includes(
+          'Folge den Kanälen, die dich interessieren'
+        );
+
+
+      const rightElements =
         [
           ...document.querySelectorAll(
             [
@@ -830,155 +911,48 @@ async function inspectRightChannelArea(
           );
 
 
-      const matchingElements =
-        elements
-          .map(
-            element => {
-
-              const rect =
-                element
-                  .getBoundingClientRect();
-
-
-              return {
-
-                tag:
-                  element.tagName,
-
-                aria:
-                  element.getAttribute(
-                    'aria-label'
-                  ),
-
-                testId:
-                  element.getAttribute(
-                    'data-testid'
-                  ),
-
-                role:
-                  element.getAttribute(
-                    'role'
-                  ),
-
-                left:
-                  Math.round(
-                    rect.left
-                  ),
-
-                top:
-                  Math.round(
-                    rect.top
-                  ),
-
-                width:
-                  Math.round(
-                    rect.width
-                  ),
-
-                height:
-                  Math.round(
-                    rect.height
-                  ),
-
-                text:
-                  (
-                    element.textContent ||
-                    ''
-                  )
-                    .replace(
-                      /\s+/g,
-                      ' '
-                    )
-                    .trim()
-                    .slice(
-                      0,
-                      300
-                    )
-              };
-            }
-          )
-          .filter(
-            item => {
-
-              const combined =
-                [
-                  item.aria,
-                  item.testId,
-                  item.text
-                ]
-                  .filter(
-                    Boolean
-                  )
-                  .join(
-                    ' '
-                  )
-                  .toLowerCase();
-
-
-              return (
-                combined.includes(
-                  channelNameLower
-                ) ||
-                combined.includes(
-                  'newsletter'
-                ) ||
-                combined.includes(
-                  'kanalinfo'
-                ) ||
-                combined.includes(
-                  'kanal-info'
-                )
-              );
-            }
-          )
-          .slice(
-            0,
-            30
-          );
-
-
-      const pageText =
-        (
-          document.body?.innerText ||
-          ''
-        )
-          .replace(
-            /\s+/g,
-            ' '
-          )
-          .trim();
-
-
-      const emptyState =
-        pageText.includes(
-          'Kanäle entdecken'
-        ) ||
-        pageText.includes(
-          'Folge den Kanälen, die dich interessieren'
-        );
-
-
       const channelNameVisibleRight =
-        matchingElements.some(
-          item =>
-            (
-              item.text ||
-              ''
-            )
-              .toLowerCase()
-              .includes(
+        rightElements.some(
+          element => {
+
+            const text =
+              (
+                element.textContent ||
+                ''
+              )
+                .replace(
+                  /\s+/g,
+                  ' '
+                )
+                .trim()
+                .toLowerCase();
+
+
+            const aria =
+              (
+                element.getAttribute(
+                  'aria-label'
+                ) ||
+                ''
+              )
+                .toLowerCase();
+
+
+            return (
+              text.includes(
+                channelNameLower
+              ) ||
+              aria.includes(
                 channelNameLower
               )
+            );
+          }
         );
 
 
       return {
-
         emptyState,
-
-        channelNameVisibleRight,
-
-        matchingElements
+        channelNameVisibleRight
       };
     },
 
@@ -989,7 +963,7 @@ async function inspectRightChannelArea(
 
 /*
 ============================================================
-KANAL ÖFFNEN
+WHATSAPP-KANAL ÖFFNEN
 ============================================================
 */
 
@@ -997,18 +971,18 @@ async function openWhatsAppChannel(
   page
 ) {
 
-  /*
-  ----------------------------------------------------------
-  KANÄLE-BEREICH FINDEN
-  ----------------------------------------------------------
-  */
-
   console.log(
     '🔎 Suche Bereich "Kanäle"...'
   );
 
 
-  const channelAreaResult =
+  /*
+  ----------------------------------------------------------
+  KANÄLE-BUTTON MARKIEREN
+  ----------------------------------------------------------
+  */
+
+  const channelsFound =
     await page.evaluate(
       () => {
 
@@ -1043,19 +1017,9 @@ async function openWhatsAppChannel(
               .getBoundingClientRect();
 
 
-          const style =
-            window.getComputedStyle(
-              element
-            );
-
-
           return (
             rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !==
-              'none' &&
-            style.visibility !==
-              'hidden'
+            rect.height > 0
           );
         }
 
@@ -1084,10 +1048,9 @@ async function openWhatsAppChannel(
                 '[data-testid]'
               ].join(',')
             )
-          ]
-            .filter(
-              isVisible
-            );
+          ].filter(
+            isVisible
+          );
 
 
         let target =
@@ -1138,8 +1101,6 @@ async function openWhatsAppChannel(
 
 
                 return (
-                  testId ===
-                    'newsletter-tab-drawer' ||
                   testId.includes(
                     'newsletter-tab-drawer'
                   )
@@ -1164,36 +1125,7 @@ async function openWhatsAppChannel(
 
         if (!target) {
 
-          target =
-            elements.find(
-              element => {
-
-                const html =
-                  (
-                    element.innerHTML ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                return (
-                  html.includes(
-                    'wds-ic-channels'
-                  ) ||
-                  html.includes(
-                    'ic-channels'
-                  )
-                );
-              }
-            );
-        }
-
-
-        if (!target) {
-
-          return {
-            found: false
-          };
+          return false;
         }
 
 
@@ -1215,16 +1147,12 @@ async function openWhatsAppChannel(
         );
 
 
-        return {
-          found: true
-        };
+        return true;
       }
     );
 
 
-  if (
-    !channelAreaResult.found
-  ) {
+  if (!channelsFound) {
 
     throw new Error(
       'Bereich "Kanäle" wurde nicht gefunden.'
@@ -1289,7 +1217,7 @@ async function openWhatsAppChannel(
 
   /*
   ----------------------------------------------------------
-  JORNE_L1VE FINDEN
+  JORNE_L1VE MARKIEREN
   ----------------------------------------------------------
   */
 
@@ -1298,7 +1226,7 @@ async function openWhatsAppChannel(
   );
 
 
-  const channelResult =
+  const channelFound =
     await page.evaluate(
       channelName => {
 
@@ -1333,79 +1261,10 @@ async function openWhatsAppChannel(
               .getBoundingClientRect();
 
 
-          const style =
-            window.getComputedStyle(
-              element
-            );
-
-
           return (
             rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !==
-              'none' &&
-            style.visibility !==
-              'hidden'
+            rect.height > 0
           );
-        }
-
-
-        function getInfo(
-          element
-        ) {
-
-          const rect =
-            element
-              .getBoundingClientRect();
-
-
-          return {
-
-            aria:
-              element.getAttribute(
-                'aria-label'
-              ),
-
-            testId:
-              element.getAttribute(
-                'data-testid'
-              ),
-
-            text:
-              (
-                element.textContent ||
-                ''
-              )
-                .replace(
-                  /\s+/g,
-                  ' '
-                )
-                .trim()
-                .slice(
-                  0,
-                  250
-                ),
-
-            width:
-              Math.round(
-                rect.width
-              ),
-
-            height:
-              Math.round(
-                rect.height
-              ),
-
-            left:
-              Math.round(
-                rect.left
-              ),
-
-            top:
-              Math.round(
-                rect.top
-              )
-          };
         }
 
 
@@ -1432,13 +1291,12 @@ async function openWhatsAppChannel(
             ...document.querySelectorAll(
               '[data-testid="newsletter-tab-newsletter-cell"]'
             )
-          ]
-            .filter(
-              isVisible
-            );
+          ].filter(
+            isVisible
+          );
 
 
-        let target =
+        const target =
           cells.find(
             element => {
 
@@ -1457,10 +1315,10 @@ async function openWhatsAppChannel(
 
 
               return (
-                aria.includes(
+                text.includes(
                   wanted
                 ) ||
-                text.includes(
+                aria.includes(
                   wanted
                 )
               );
@@ -1470,32 +1328,24 @@ async function openWhatsAppChannel(
 
         if (!target) {
 
-          return {
-            found: false
-          };
+          return false;
         }
 
 
-        const info =
-          getInfo(
-            target
-          );
+        const rect =
+          target
+            .getBoundingClientRect();
 
 
         if (
-          info.width >
-            700 ||
-          info.height >
-            300 ||
-          info.left >
+          rect.width > 700 ||
+          rect.height > 300 ||
+          rect.left >
             window.innerWidth *
               0.55
         ) {
 
-          return {
-            found: false,
-            rejected: info
-          };
+          return false;
         }
 
 
@@ -1505,28 +1355,17 @@ async function openWhatsAppChannel(
         );
 
 
-        return {
-          found: true,
-          selected: info
-        };
+        return true;
       },
 
       CHANNEL_NAME
     );
 
 
-  console.log(
-    '📺 Kanal-Suche:',
-    channelResult
-  );
-
-
-  if (
-    !channelResult.found
-  ) {
+  if (!channelFound) {
 
     throw new Error(
-      `Kanal "${CHANNEL_NAME}" wurde nicht sicher gefunden.`
+      `Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`
     );
   }
 
@@ -1568,32 +1407,18 @@ async function openWhatsAppChannel(
   if (!box) {
 
     throw new Error(
-      'Keine Klickposition für Kanal verfügbar.'
+      'Keine Klickposition für Jorne_L1ve verfügbar.'
     );
   }
 
 
   /*
-   * Echter Maus-Klick –
-   * genau diese Variante hat unseren
-   * erfolgreichen BOT-TEST veröffentlicht.
+   * Echter Maus-Klick.
+   * Genau damit hat unser Test funktioniert.
    */
 
-  await page.mouse.move(
-    box.x +
-      box.width / 2,
-
-    box.y +
-      box.height / 2
-  );
-
-
-  await sleep(
-    300
-  );
-
-
   await page.mouse.click(
+
     box.x +
       box.width / 2,
 
@@ -1622,34 +1447,28 @@ async function openWhatsAppChannel(
 
 
   await sleep(
-    2000
+    1500
   );
 
 
-  /*
-   * Prüfen, ob die rechte Kanalansicht
-   * tatsächlich gewechselt hat.
-   */
-
-  let channelCheck =
+  let check =
     await inspectRightChannelArea(
       page
     );
 
 
-  console.log(
-    '🔍 Kanalansicht:',
-    channelCheck
-  );
-
+  /*
+   * Falls erster Klick nicht reicht,
+   * genau einmal erneut klicken.
+   */
 
   if (
-    channelCheck.emptyState &&
-    !channelCheck.channelNameVisibleRight
+    check.emptyState &&
+    !check.channelNameVisibleRight
   ) {
 
     console.log(
-      '🔁 Zweiter Klick auf den Kanal...'
+      '🔁 Kanalansicht noch nicht offen – zweiter Klick.'
     );
 
 
@@ -1668,6 +1487,7 @@ async function openWhatsAppChannel(
       if (secondBox) {
 
         await page.mouse.click(
+
           secondBox.x +
             secondBox.width / 2,
 
@@ -1687,20 +1507,26 @@ async function openWhatsAppChannel(
     }
 
 
-    channelCheck =
+    check =
       await inspectRightChannelArea(
         page
       );
   }
 
 
+  console.log(
+    '📺 Kanalansicht:',
+    check
+  );
+
+
   if (
-    channelCheck.emptyState &&
-    !channelCheck.channelNameVisibleRight
+    check.emptyState &&
+    !check.channelNameVisibleRight
   ) {
 
     throw new Error(
-      `Kanal "${CHANNEL_NAME}" wurde links gefunden, aber rechts nicht geöffnet.`
+      `Kanal "${CHANNEL_NAME}" wurde rechts nicht geöffnet.`
     );
   }
 
@@ -1711,7 +1537,7 @@ async function openWhatsAppChannel(
 
 
   await sleep(
-    3000
+    2500
   );
 }
 
@@ -1726,7 +1552,7 @@ async function markComposer(
   page
 ) {
 
-  const result =
+  const found =
     await page.evaluate(
       () => {
 
@@ -1753,12 +1579,8 @@ async function markComposer(
           return (
             rect.width > 0 &&
             rect.height > 0 &&
-            style.display !==
-              'none' &&
-            style.visibility !==
-              'hidden' &&
-            style.opacity !==
-              '0'
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
           );
         }
 
@@ -1776,9 +1598,8 @@ async function markComposer(
 
 
         /*
-         * Bevorzugt direkt das Feld,
-         * das beim erfolgreichen Test
-         * verwendet wurde.
+         * Beim erfolgreichen Test wurde
+         * dieses data-testid erkannt.
          */
 
         let target =
@@ -1815,10 +1636,9 @@ async function markComposer(
                   'textarea'
                 ].join(',')
               )
-            ]
-              .filter(
-                isVisible
-              );
+            ].filter(
+              isVisible
+            );
 
 
           target =
@@ -1853,21 +1673,15 @@ async function markComposer(
                     .toLowerCase();
 
 
-                const search =
-                  aria.includes(
-                    'suchen'
-                  ) ||
-                  placeholder.includes(
-                    'suchen'
-                  );
-
-
                 return (
-                  !search &&
-                  rect.left >
-                    500 &&
-                  rect.width >
-                    100
+                  !aria.includes(
+                    'suchen'
+                  ) &&
+                  !placeholder.includes(
+                    'suchen'
+                  ) &&
+                  rect.left > 500 &&
+                  rect.width > 100
                 );
               }
             );
@@ -1876,9 +1690,7 @@ async function markComposer(
 
         if (!target) {
 
-          return {
-            found: false
-          };
+          return false;
         }
 
 
@@ -1888,473 +1700,125 @@ async function markComposer(
         );
 
 
-        return {
-          found: true,
-
-          testId:
-            target.getAttribute(
-              'data-testid'
-            ),
-
-          aria:
-            target.getAttribute(
-              'aria-label'
-            )
-        };
+        return true;
       }
     );
 
 
-  console.log(
-    '📝 Composer:',
-    result
-  );
-
-
-  if (
-    !result.found
-  ) {
+  if (!found) {
 
     throw new Error(
       'Meldungsfeld wurde nicht gefunden.'
     );
   }
+
+
+  console.log(
+    '✅ WhatsApp-Meldungsfeld gefunden.'
+  );
 }
 
 
 /*
 ============================================================
-WHATSAPP-NACHRICHT SENDEN
+MEHRZEILIGE MELDUNG EINGEBEN
 ============================================================
 */
 
-async function sendWhatsAppLiveMessage(
-  client
+async function typeMultilineMessage(
+  page,
+  message
 ) {
 
-  if (sendRunning) {
-
-    throw new Error(
-      'WhatsApp-Sendevorgang läuft bereits.'
-    );
-  }
-
-
-  sendRunning =
-    true;
-
-
-  try {
-
-    const state =
-      await client.getState();
-
-
-    if (
-      state !==
-        'CONNECTED'
-    ) {
-
-      throw new Error(
-        `WhatsApp ist nicht CONNECTED, sondern ${state}.`
-      );
-    }
-
-
-    const page =
-      client.pupPage;
-
-
-    if (!page) {
-
-      throw new Error(
-        'Puppeteer-Seite wurde nicht gefunden.'
-      );
-    }
-
-
-    console.log(
-      '================================'
+  const lines =
+    message.split(
+      '\n'
     );
 
 
-    console.log(
-      '📤 SENDE LIVE-MELDUNG AN WHATSAPP'
-    );
-
-
-    console.log(
-      '================================'
-    );
-
-
-    await openWhatsAppChannel(
-      page
-    );
-
-
-    await markComposer(
-      page
-    );
-
-
-    const composer =
-      await page.$(
-        '[data-bot-composer="true"]'
-      );
-
-
-    if (!composer) {
-
-      throw new Error(
-        'Markiertes Meldungsfeld konnte nicht wiedergefunden werden.'
-      );
-    }
-
-
-    await composer.evaluate(
-      element => {
-
-        element.scrollIntoView({
-          block: 'center',
-          inline: 'center'
-        });
-      }
-    );
-
-
-    await sleep(
-      500
-    );
-
-
-    await composer.click({
-      delay: 100
-    });
-
-
-    await sleep(
-      500
-    );
-
-
-    await page.keyboard.type(
-      LIVE_MESSAGE,
-
-      {
-        delay: 30
-      }
-    );
-
-
-    console.log(
-      '⌨️ Live-Meldung eingegeben.'
-    );
-
-
-    await sleep(
-      1500
-    );
-
-
-    await page.keyboard.press(
-      'Enter'
-    );
-
-
-    console.log(
-      '📤 ENTER gedrückt.'
-    );
-
-
-    await sleep(
-      4000
-    );
-
-
-    const visible =
-      await page.evaluate(
-        expected => {
-
-          return [
-            ...document.querySelectorAll(
-              '*'
-            )
-          ]
-            .some(
-              element =>
-                (
-                  element.textContent ||
-                  ''
-                )
-                  .trim() ===
-                expected
-            );
-        },
-
-        LIVE_MESSAGE
-      );
-
-
-    if (
-      !visible
-    ) {
-
-      throw new Error(
-        'Live-Meldung wurde nach ENTER nicht eindeutig in WhatsApp gefunden.'
-      );
-    }
-
-
-    console.log(
-      '🎉 LIVE-MELDUNG ERFOLGREICH IM WHATSAPP-KANAL!'
-    );
-
-
-    return true;
-
-  } finally {
-
-    sendRunning =
-      false;
-  }
-}
-
-
-/*
-============================================================
-EINEN LIVE-CHECK AUSFÜHREN
-============================================================
-*/
-
-async function runLiveCheck(
-  client
-) {
-
-  if (
-    liveCheckRunning
+  for (
+    let index = 0;
+    index < lines.length;
+    index++
   ) {
 
-    console.log(
-      '⏳ Vorheriger TikTok-Check läuft noch.'
-    );
+    const line =
+      lines[index];
 
 
-    return;
-  }
+    if (line) {
 
+      await page.keyboard.type(
+        line,
 
-  liveCheckRunning =
-    true;
-
-
-  try {
-
-    if (
-      !whatsappReady
-    ) {
-
-      console.log(
-        '⏳ WhatsApp ist noch nicht bereit.'
+        {
+          delay: 25
+        }
       );
-
-
-      return;
     }
 
 
-    let currentLive;
-
-
-    try {
-
-      currentLive =
-        await checkTikTokLive();
-
-    } catch (error) {
-
-      if (
-        error.name ===
-          'TimeoutError'
-      ) {
-
-        console.warn(
-          error.message
-        );
-
-
-        console.warn(
-          '⚠️ Dieser TikTok-Check wird übersprungen.'
-        );
-
-
-        return;
-      }
-
-
-      throw error;
-    }
-
-
-    const oldLive =
-      await getSavedLiveState();
-
-
-    console.log(
-      `🗄️ Gespeicherter TikTok-Status: ${oldLive ? 'LIVE' : 'offline'}`
-    );
-
-
-    /*
-    ----------------------------------------------------------
-    OFFLINE → LIVE
-    ----------------------------------------------------------
-    */
-
     if (
-      currentLive &&
-      !oldLive
+      index <
+      lines.length - 1
     ) {
-
-      console.log(
-        '🔴 NEUER LIVE-START ERKANNT!'
-      );
-
 
       /*
-       * Erst WhatsApp senden.
-       * Nur wenn das klappt, speichern wir LIVE.
+       * Zeilenumbruch ohne Absenden.
        */
 
-      await sendWhatsAppLiveMessage(
-        client
+      await page.keyboard.down(
+        'Shift'
       );
 
 
-      await saveLiveState(
-        true
+      await page.keyboard.press(
+        'Enter'
       );
 
 
-      console.log(
-        '✅ LIVE-Status in MongoDB gespeichert.'
+      await page.keyboard.up(
+        'Shift'
       );
-
-
-      return;
     }
-
-
-    /*
-    ----------------------------------------------------------
-    LIVE → LIVE
-    ----------------------------------------------------------
-    */
-
-    if (
-      currentLive &&
-      oldLive
-    ) {
-
-      console.log(
-        '🔴 Jorne ist weiterhin LIVE.'
-      );
-
-
-      console.log(
-        '✅ Keine zweite WhatsApp-Nachricht erforderlich.'
-      );
-
-
-      return;
-    }
-
-
-    /*
-    ----------------------------------------------------------
-    LIVE → OFFLINE
-    ----------------------------------------------------------
-    */
-
-    if (
-      !currentLive &&
-      oldLive
-    ) {
-
-      console.log(
-        '⚫ Jorne ist jetzt OFFLINE.'
-      );
-
-
-      await saveLiveState(
-        false
-      );
-
-
-      console.log(
-        '✅ Status zurückgesetzt.'
-      );
-
-
-      console.log(
-        '➡️ Beim nächsten Live-Start wird wieder eine Nachricht gesendet.'
-      );
-
-
-      return;
-    }
-
-
-    /*
-    ----------------------------------------------------------
-    OFFLINE → OFFLINE
-    ----------------------------------------------------------
-    */
-
-    console.log(
-      '⚫ Jorne ist weiterhin offline.'
-    );
-
-
-    console.log(
-      '✅ Keine WhatsApp-Nachricht erforderlich.'
-    );
-
-  } catch (error) {
-
-    console.error(
-      '❌ Fehler beim TikTok-Live-Check:',
-      error
-    );
-
-  } finally {
-
-    liveCheckRunning =
-      false;
   }
 }
 
 
 /*
 ============================================================
-TIKTOK-MONITOR STARTEN
+LIVE-MELDUNG SENDEN
 ============================================================
 */
 
-async function startTikTokMonitor(
+async function sendLiveMessage(
   client
 ) {
 
+  const state =
+    await client.getState();
+
+
   if (
-    monitorStarted
+    state !== 'CONNECTED'
   ) {
 
-    return;
+    throw new Error(
+      `WhatsApp ist nicht CONNECTED, sondern ${state}.`
+    );
   }
 
 
-  monitorStarted =
-    true;
+  const page =
+    client.pupPage;
+
+
+  if (!page) {
+
+    throw new Error(
+      'Puppeteer-Seite wurde nicht gefunden.'
+    );
+  }
 
 
   console.log(
@@ -2363,22 +1827,7 @@ async function startTikTokMonitor(
 
 
   console.log(
-    '👀 TIKTOK-LIVE-MONITOR GESTARTET'
-  );
-
-
-  console.log(
-    `👤 Account: @${TIKTOK_USERNAME}`
-  );
-
-
-  console.log(
-    '⏱️ Prüfung: alle 60 Sekunden'
-  );
-
-
-  console.log(
-    `📢 WhatsApp-Kanal: ${CHANNEL_NAME}`
+    '📤 SENDE LIVE-MELDUNG AN WHATSAPP'
   );
 
 
@@ -2387,157 +1836,114 @@ async function startTikTokMonitor(
   );
 
 
-  /*
-   * Sofort erster Check.
-   */
+  await openWhatsAppChannel(
+    page
+  );
 
-  await runLiveCheck(
-    client
+
+  await markComposer(
+    page
+  );
+
+
+  const composer =
+    await page.$(
+      '[data-bot-composer="true"]'
+    );
+
+
+  if (!composer) {
+
+    throw new Error(
+      'Markiertes Meldungsfeld wurde nicht wiedergefunden.'
+    );
+  }
+
+
+  await composer.evaluate(
+    element => {
+
+      element.scrollIntoView({
+        block: 'center',
+        inline: 'center'
+      });
+    }
+  );
+
+
+  await sleep(
+    500
+  );
+
+
+  await composer.click({
+    delay: 100
+  });
+
+
+  await sleep(
+    500
+  );
+
+
+  await typeMultilineMessage(
+    page,
+    LIVE_MESSAGE
+  );
+
+
+  console.log(
+    '⌨️ Live-Meldung vollständig eingegeben.'
+  );
+
+
+  await sleep(
+    1500
   );
 
 
   /*
-   * Danach jede Minute.
+   * Erst jetzt wirklich absenden.
    */
 
-  setInterval(
-    () => {
+  await page.keyboard.press(
+    'Enter'
+  );
 
-      runLiveCheck(
-        client
-      )
-        .catch(
-          error => {
 
-            console.error(
-              '❌ Intervall-Check fehlgeschlagen:',
-              error
-            );
-          }
-        );
+  console.log(
+    '📤 ENTER gedrückt.'
+  );
 
-    },
 
-    TIKTOK_CHECK_INTERVAL_MS
+  await sleep(
+    4000
+  );
+
+
+  console.log(
+    '🎉 WhatsApp-Live-Meldung wurde abgesendet.'
   );
 }
 
 
 /*
 ============================================================
-BOT START
+WHATSAPP STARTEN UND AUF READY WARTEN
 ============================================================
 */
 
-async function startBot() {
-
-  /*
-   * Secrets prüfen.
-   */
-
-  if (
-    !process.env.MONGODB_URI
-  ) {
-
-    throw new Error(
-      'MONGODB_URI fehlt.'
-    );
-  }
-
-
-  if (
-    !process.env.WHATSAPP_PHONE
-  ) {
-
-    throw new Error(
-      'WHATSAPP_PHONE fehlt.'
-    );
-  }
-
-
-  /*
-   * RemoteAuth-Ordner.
-   */
+async function startWhatsAppAndSend(
+  store
+) {
 
   fs.mkdirSync(
     AUTH_DATA_PATH,
-
     {
       recursive: true
     }
   );
 
-
-  console.log(
-    '📁 RemoteAuth-Ordner bereit:',
-    AUTH_DATA_PATH
-  );
-
-
-  /*
-   * MongoDB.
-   */
-
-  console.log(
-    'Verbinde mit MongoDB...'
-  );
-
-
-  await mongoose.connect(
-    process.env.MONGODB_URI
-  );
-
-
-  console.log(
-    '✅ MongoDB verbunden.'
-  );
-
-
-  /*
-   * Store.
-   */
-
-  const store =
-    new FixedMongoStore({
-
-      mongoose,
-
-      dataPath:
-        AUTH_DATA_PATH
-    });
-
-
-  /*
-   * Gespeicherte WhatsApp-Sitzung prüfen.
-   */
-
-  try {
-
-    const exists =
-      await store.sessionExists({
-
-        session:
-          `RemoteAuth-${CLIENT_ID}`
-      });
-
-
-    console.log(
-      '🗄️ Gespeicherte WhatsApp-Sitzung vorhanden:',
-      exists
-    );
-
-  } catch (error) {
-
-    console.log(
-      '⚠️ Sitzungsstatus konnte nicht geprüft werden:',
-      error.message
-    );
-  }
-
-
-  /*
-   * WhatsApp-Client.
-   */
 
   const client =
     new Client({
@@ -2576,8 +1982,7 @@ async function startBot() {
 
       puppeteer: {
 
-        headless:
-          true,
+        headless: true,
 
         args: [
 
@@ -2592,266 +1997,623 @@ async function startBot() {
 
         defaultViewport: {
 
-          width:
-            1365,
+          width: 1365,
 
-          height:
-            900
+          height: 900
         }
       }
     });
 
 
-  /*
-  ------------------------------------------------------------
-  WHATSAPP EVENTS
-  ------------------------------------------------------------
-  */
+  const readyPromise =
+    new Promise(
+      (
+        resolve,
+        reject
+      ) => {
+
+        let resolved =
+          false;
 
 
-  client.on(
-    'code',
+        const finishReady =
+          () => {
 
-    code => {
-
-      console.log(
-        '================================'
-      );
+            if (resolved) {
+              return;
+            }
 
 
-      console.log(
-        '📱 WHATSAPP KOPPLUNGSCODE:'
-      );
+            resolved =
+              true;
 
 
-      console.log(
-        code
-      );
+            resolve();
+          };
 
 
-      console.log(
-        '================================'
-      );
-    }
-  );
+        client.on(
+          'authenticated',
+          () => {
 
-
-  client.on(
-    'authenticated',
-
-    () => {
-
-      console.log(
-        '✅ WhatsApp erfolgreich angemeldet.'
-      );
-    }
-  );
-
-
-  client.on(
-    'ready',
-
-    async () => {
-
-      console.log(
-        '✅ WhatsApp READY-Event erhalten.'
-      );
-
-
-      /*
-       * WhatsApp nach READY fertig laden lassen.
-       */
-
-      await sleep(
-        7000
-      );
-
-
-      try {
-
-        const state =
-          await client.getState();
-
-
-        console.log(
-          '📡 WhatsApp-Status nach READY:',
-          state
+            console.log(
+              '✅ WhatsApp erfolgreich angemeldet.'
+            );
+          }
         );
 
 
-        if (
-          state ===
-            'CONNECTED'
-        ) {
+        client.on(
+          'ready',
+          () => {
 
-          whatsappReady =
-            true;
-
-
-          console.log(
-            '✅ WhatsApp-Bot ist bereit.'
-          );
+            console.log(
+              '✅ WhatsApp READY-Event erhalten.'
+            );
 
 
-          await startTikTokMonitor(
-            client
-          );
+            finishReady();
+          }
+        );
 
-        } else {
 
-          console.log(
-            '⏳ WhatsApp ist noch nicht CONNECTED.'
-          );
-        }
+        client.on(
+          'change_state',
+          state => {
 
-      } catch (error) {
+            console.log(
+              '🔄 WhatsApp Statusänderung:',
+              state
+            );
+
+
+            if (
+              state ===
+              'CONNECTED'
+            ) {
+
+              /*
+               * Bei uns kam CONNECTED teilweise
+               * auch ohne READY zuverlässig.
+               */
+
+              setTimeout(
+                finishReady,
+                3000
+              );
+            }
+          }
+        );
+
+
+        client.on(
+          'code',
+          code => {
+
+            console.log(
+              '================================'
+            );
+
+
+            console.log(
+              '📱 WHATSAPP KOPPLUNGSCODE:'
+            );
+
+
+            console.log(
+              code
+            );
+
+
+            console.log(
+              '================================'
+            );
+          }
+        );
+
+
+        client.on(
+          'auth_failure',
+          message => {
+
+            reject(
+              new Error(
+                `WhatsApp-Anmeldung fehlgeschlagen: ${message}`
+              )
+            );
+          }
+        );
+
+
+        client.on(
+          'disconnected',
+          reason => {
+
+            if (!resolved) {
+
+              reject(
+                new Error(
+                  `WhatsApp wurde getrennt: ${reason}`
+                )
+              );
+            }
+          }
+        );
+
+
+        client.on(
+          'remote_session_saved',
+          () => {
+
+            console.log(
+              '💾 REMOTE SESSION SAVED.'
+            );
+          }
+        );
+      }
+    );
+
+
+  /*
+   * Initialisierung im Hintergrund starten.
+   */
+
+  client
+    .initialize()
+    .catch(
+      error => {
 
         console.error(
-          '❌ READY-Prüfung fehlgeschlagen:',
+          '❌ WhatsApp-Initialisierung:',
           error
         );
       }
-    }
-  );
+    );
 
 
-  client.on(
-    'change_state',
+  /*
+   * Maximal 90 Sekunden warten.
+   */
 
-    state => {
+  await withTimeout(
 
-      console.log(
-        '🔄 WhatsApp Statusänderung:',
-        state
-      );
+    readyPromise,
 
+    WHATSAPP_READY_TIMEOUT_MS,
 
-      if (
-        state ===
-          'CONNECTED'
-      ) {
-
-        whatsappReady =
-          true;
-
-
-        /*
-         * Falls READY nicht sauber kam,
-         * trotzdem Monitor starten.
-         */
-
-        if (
-          !monitorStarted
-        ) {
-
-          setTimeout(
-            () => {
-
-              startTikTokMonitor(
-                client
-              )
-                .catch(
-                  error => {
-
-                    console.error(
-                      '❌ TikTok-Monitor konnte nicht gestartet werden:',
-                      error
-                    );
-                  }
-                );
-
-            },
-
-            5000
-          );
-        }
-
-      } else {
-
-        whatsappReady =
-          false;
-      }
-    }
-  );
-
-
-  client.on(
-    'remote_session_saved',
-
-    () => {
-
-      console.log(
-        '💾 REMOTE SESSION SAVED.'
-      );
-    }
-  );
-
-
-  client.on(
-    'auth_failure',
-
-    message => {
-
-      whatsappReady =
-        false;
-
-
-      console.error(
-        '❌ WhatsApp-Anmeldung fehlgeschlagen:',
-        message
-      );
-    }
-  );
-
-
-  client.on(
-    'disconnected',
-
-    reason => {
-
-      whatsappReady =
-        false;
-
-
-      console.log(
-        '⚠️ WhatsApp getrennt:',
-        reason
-      );
-    }
+    'WhatsApp wurde innerhalb von 90 Sekunden nicht bereit.'
   );
 
 
   /*
-   * WhatsApp starten.
+   * Sicherstellen, dass CONNECTED.
    */
 
+  let state =
+    null;
+
+
+  for (
+    let attempt = 1;
+    attempt <= 10;
+    attempt++
+  ) {
+
+    try {
+
+      state =
+        await client.getState();
+
+    } catch {}
+
+
+    if (
+      state === 'CONNECTED'
+    ) {
+
+      break;
+    }
+
+
+    await sleep(
+      2000
+    );
+  }
+
+
+  if (
+    state !== 'CONNECTED'
+  ) {
+
+    try {
+      await client.destroy();
+    } catch {}
+
+
+    throw new Error(
+      `WhatsApp ist nach dem Start nicht CONNECTED: ${state}`
+    );
+  }
+
+
   console.log(
-    '🚀 WhatsApp wird gestartet...'
+    '✅ WhatsApp ist CONNECTED.'
   );
 
 
-  await client.initialize();
+  /*
+   * Oberfläche kurz stabilisieren.
+   */
+
+  await sleep(
+    4000
+  );
+
+
+  try {
+
+    await sendLiveMessage(
+      client
+    );
+
+  } finally {
+
+    /*
+     * Dieser GitHub-Run soll danach ENDEN.
+     */
+
+    await sleep(
+      3000
+    );
+
+
+    try {
+
+      await client.destroy();
+
+
+      console.log(
+        '✅ WhatsApp-Client beendet.'
+      );
+
+    } catch (error) {
+
+      console.log(
+        '⚠️ WhatsApp-Client konnte nicht sauber beendet werden:',
+        error.message
+      );
+    }
+  }
 }
 
 
 /*
 ============================================================
-START
+EINMALIGER GITHUB-CHECK
 ============================================================
 */
 
-startBot()
-  .catch(
-    error => {
+async function main() {
 
-      console.error(
-        '❌ STARTFEHLER:'
+  /*
+   * Secrets.
+   */
+
+  if (
+    !process.env.MONGODB_URI
+  ) {
+
+    throw new Error(
+      'MONGODB_URI fehlt.'
+    );
+  }
+
+
+  if (
+    !process.env.WHATSAPP_PHONE
+  ) {
+
+    throw new Error(
+      'WHATSAPP_PHONE fehlt.'
+    );
+  }
+
+
+  /*
+   * MongoDB verbinden.
+   */
+
+  console.log(
+    'Verbinde mit MongoDB...'
+  );
+
+
+  await mongoose.connect(
+    process.env.MONGODB_URI
+  );
+
+
+  console.log(
+    '✅ MongoDB verbunden.'
+  );
+
+
+  /*
+   * TikTok genau EINMAL prüfen.
+   */
+
+  const currentLive =
+    await checkTikTokLive();
+
+
+  const oldLive =
+    await getSavedLiveState();
+
+
+  console.log(
+    `🗄️ Gespeicherter Status: ${oldLive ? 'LIVE' : 'offline'}`
+  );
+
+
+  /*
+  ==========================================================
+  OFFLINE
+  ==========================================================
+  */
+
+  if (
+    !currentLive
+  ) {
+
+    if (
+      oldLive
+    ) {
+
+      await setOfflineState();
+
+
+      console.log(
+        '⚫ Jorne ist wieder offline.'
       );
 
 
+      console.log(
+        '✅ Status wurde zurückgesetzt.'
+      );
+
+
+      console.log(
+        '➡️ Beim nächsten Live-Start wird wieder eine WhatsApp-Meldung gesendet.'
+      );
+
+    } else {
+
+      console.log(
+        '⚫ Jorne ist weiterhin offline.'
+      );
+
+
+      console.log(
+        '✅ Keine WhatsApp-Nachricht erforderlich.'
+      );
+    }
+
+
+    return;
+  }
+
+
+  /*
+  ==========================================================
+  LIVE
+  ==========================================================
+  */
+
+  if (
+    currentLive &&
+    oldLive
+  ) {
+
+    console.log(
+      '🔴 Jorne ist weiterhin LIVE.'
+    );
+
+
+    console.log(
+      '✅ Die Live-Meldung wurde bereits ausgelöst.'
+    );
+
+
+    console.log(
+      '✅ Keine zweite WhatsApp-Nachricht.'
+    );
+
+
+    return;
+  }
+
+
+  /*
+  ==========================================================
+  NEUER LIVE-START
+  ==========================================================
+  */
+
+  console.log(
+    '🔴 NEUER TIKTOK-LIVE-START ERKANNT!'
+  );
+
+
+  /*
+   * LIVE atomar reservieren.
+   *
+   * Falls zwischenzeitlich ein anderer GitHub-Run
+   * schneller war, wird hier false geliefert.
+   */
+
+  const claimed =
+    await claimNewLiveStart();
+
+
+  if (!claimed) {
+
+    console.log(
+      '✅ Ein anderer Lauf hat diesen Live-Start bereits übernommen.'
+    );
+
+
+    console.log(
+      '✅ Keine doppelte Nachricht.'
+    );
+
+
+    return;
+  }
+
+
+  console.log(
+    '🔒 Live-Start für diesen Workflow reserviert.'
+  );
+
+
+  /*
+   * WhatsApp-Store.
+   */
+
+  fs.mkdirSync(
+    AUTH_DATA_PATH,
+    {
+      recursive: true
+    }
+  );
+
+
+  const store =
+    new FixedMongoStore({
+
+      mongoose,
+
+      dataPath:
+        AUTH_DATA_PATH
+    });
+
+
+  try {
+
+    const exists =
+      await store.sessionExists({
+
+        session:
+          `RemoteAuth-${CLIENT_ID}`
+      });
+
+
+    console.log(
+      '🗄️ Gespeicherte WhatsApp-Sitzung vorhanden:',
+      exists
+    );
+
+  } catch (error) {
+
+    console.log(
+      '⚠️ WhatsApp-Sitzungsstatus konnte nicht geprüft werden:',
+      error.message
+    );
+  }
+
+
+  /*
+   * WhatsApp nur bei NEUEM LIVE starten.
+   */
+
+  try {
+
+    await startWhatsAppAndSend(
+      store
+    );
+
+
+    console.log(
+      '================================'
+    );
+
+
+    console.log(
+      '🎉 LIVE-ALARM ERFOLGREICH ABGESCHLOSSEN'
+    );
+
+
+    console.log(
+      '================================'
+    );
+
+  } catch (error) {
+
+    /*
+     * Senden fehlgeschlagen:
+     * LIVE wieder freigeben, damit der nächste
+     * Minuten-Run einen neuen Versuch machen kann.
+     */
+
+    await setOfflineState();
+
+
+    console.error(
+      '❌ WhatsApp-Live-Meldung fehlgeschlagen.'
+    );
+
+
+    console.error(
+      '➡️ LIVE-Status wurde wieder freigegeben, damit der nächste Run erneut versucht.'
+    );
+
+
+    throw error;
+  }
+}
+
+
+/*
+============================================================
+START + SAUBERES ENDE
+============================================================
+*/
+
+main()
+  .then(
+    async () => {
+
+      try {
+
+        await mongoose.disconnect();
+
+      } catch {}
+
+
+      console.log(
+        '✅ Live-Check abgeschlossen.'
+      );
+
+
+      process.exit(
+        0
+      );
+    }
+  )
+  .catch(
+    async error => {
+
       console.error(
+        '❌ Live-Check fehlgeschlagen:',
         error
       );
+
+
+      try {
+
+        await mongoose.disconnect();
+
+      } catch {}
 
 
       process.exit(
