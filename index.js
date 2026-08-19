@@ -72,14 +72,15 @@ class FixedMongoStore extends MongoStore {
       readStream.pipe(uploadStream);
     });
 
-    const documents = await bucket
-      .find({
-        filename: `${session}.zip`
-      })
-      .sort({
-        uploadDate: -1
-      })
-      .toArray();
+    const documents =
+      await bucket
+        .find({
+          filename: `${session}.zip`
+        })
+        .sort({
+          uploadDate: -1
+        })
+        .toArray();
 
     if (documents.length > 1) {
       for (
@@ -121,6 +122,328 @@ function sleep(ms) {
 
 /*
 ============================================================
+WHATSAPP-POPUP SCHLIESSEN
+============================================================
+*/
+
+async function closeWhatsAppPopup(page) {
+
+  console.log(
+    '🔎 Prüfe auf WhatsApp-Popup...'
+  );
+
+  const result =
+    await page.evaluate(() => {
+
+      function isVisible(element) {
+        if (!element) {
+          return false;
+        }
+
+        const rect =
+          element.getBoundingClientRect();
+
+        const style =
+          window.getComputedStyle(
+            element
+          );
+
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== 'none' &&
+          style.visibility !== 'hidden'
+        );
+      }
+
+
+      function getText(element) {
+        return (
+          element?.textContent ||
+          ''
+        )
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+
+
+      /*
+       * Bekannte Popup-Container.
+       */
+
+      let popup =
+        document.querySelector(
+          '[data-testid="confirm-popup"]'
+        );
+
+
+      if (
+        !popup ||
+        !isVisible(popup)
+      ) {
+        popup =
+          document.querySelector(
+            '[data-testid="popup-contents"]'
+          );
+      }
+
+
+      if (
+        !popup ||
+        !isVisible(popup)
+      ) {
+        popup =
+          [
+            ...document.querySelectorAll(
+              '[role="dialog"]'
+            )
+          ].find(
+            isVisible
+          );
+      }
+
+
+      if (!popup) {
+        return {
+          found: false,
+          closed: false
+        };
+      }
+
+
+      const popupText =
+        getText(popup)
+          .slice(
+            0,
+            500
+          );
+
+
+      /*
+       * Zuerst nach einem echten Schließen-X suchen.
+       */
+
+      const candidates =
+        [
+          ...popup.querySelectorAll(
+            [
+              'button',
+              '[role="button"]',
+              '[tabindex]',
+              '[aria-label]'
+            ].join(',')
+          )
+        ]
+          .filter(
+            isVisible
+          );
+
+
+      let closeButton =
+        candidates.find(
+          element => {
+
+            const aria =
+              (
+                element.getAttribute(
+                  'aria-label'
+                ) || ''
+              )
+                .trim()
+                .toLowerCase();
+
+            const testId =
+              (
+                element.getAttribute(
+                  'data-testid'
+                ) || ''
+              )
+                .trim()
+                .toLowerCase();
+
+            const text =
+              getText(element)
+                .toLowerCase();
+
+            return (
+              aria === 'schließen' ||
+              aria === 'close' ||
+              aria.includes(
+                'schließen'
+              ) ||
+              testId.includes(
+                'close'
+              ) ||
+              text === 'schließen' ||
+              text === 'close'
+            );
+          }
+        );
+
+
+      /*
+       * WhatsApp verwendet teilweise nur
+       * Icon-Klassen/Icons ohne ARIA-Label.
+       */
+
+      if (!closeButton) {
+        closeButton =
+          candidates.find(
+            element => {
+
+              const content =
+                (
+                  element.innerHTML ||
+                  ''
+                )
+                  .toLowerCase();
+
+              return (
+                content.includes(
+                  'ic-close'
+                ) ||
+                content.includes(
+                  'wds-ic-close'
+                )
+              );
+            }
+          );
+      }
+
+
+      /*
+       * Falls kein X existiert:
+       * nach Bestätigungsbuttons suchen.
+       */
+
+      if (!closeButton) {
+        closeButton =
+          candidates.find(
+            element => {
+
+              const text =
+                getText(element)
+                  .toLowerCase();
+
+              return (
+                text === 'ok' ||
+                text === 'okay' ||
+                text === 'verstanden' ||
+                text === 'fertig' ||
+                text === 'weiter' ||
+                text === 'nicht jetzt'
+              );
+            }
+          );
+      }
+
+
+      if (!closeButton) {
+        return {
+          found: true,
+          closed: false,
+          text: popupText
+        };
+      }
+
+
+      try {
+        closeButton.click();
+
+        return {
+          found: true,
+          closed: true,
+          text: popupText,
+          buttonText:
+            getText(
+              closeButton
+            ),
+          buttonAria:
+            closeButton.getAttribute(
+              'aria-label'
+            )
+        };
+
+      } catch (error) {
+
+        return {
+          found: true,
+          closed: false,
+          text: popupText,
+          error:
+            String(
+              error?.message ||
+              error
+            )
+        };
+      }
+    });
+
+
+  console.log(
+    '🪟 Popup-Prüfung:',
+    result
+  );
+
+
+  if (
+    result.found &&
+    result.closed
+  ) {
+    console.log(
+      '✅ WhatsApp-Popup geschlossen.'
+    );
+
+    await sleep(2500);
+
+    return true;
+  }
+
+
+  if (
+    result.found &&
+    !result.closed
+  ) {
+    console.log(
+      '⚠️ Popup erkannt, aber kein geeigneter Schließen-Button gefunden.'
+    );
+
+    /*
+     * ESC als sicherer zweiter Versuch.
+     */
+
+    try {
+      await page.keyboard.press(
+        'Escape'
+      );
+
+      await sleep(2000);
+
+      console.log(
+        '⌨️ ESC zum Schließen des Popups gedrückt.'
+      );
+
+    } catch (error) {
+      console.log(
+        '⚠️ ESC konnte nicht ausgeführt werden:',
+        error.message
+      );
+    }
+
+    return true;
+  }
+
+
+  console.log(
+    '✅ Kein störendes WhatsApp-Popup sichtbar.'
+  );
+
+  return false;
+}
+
+
+/*
+============================================================
 KANAL-UI-TEST
 ============================================================
 */
@@ -129,6 +452,7 @@ async function runChannelUITest(
   client,
   reason
 ) {
+
   if (
     testStarted ||
     testRunning
@@ -136,7 +460,9 @@ async function runChannelUITest(
     return;
   }
 
+
   testRunning = true;
+
 
   console.log(
     '================================'
@@ -155,6 +481,7 @@ async function runChannelUITest(
     '================================'
   );
 
+
   try {
 
     /*
@@ -166,10 +493,12 @@ async function runChannelUITest(
     const state =
       await client.getState();
 
+
     console.log(
       '📡 WhatsApp-Status:',
       state
     );
+
 
     if (
       state !== 'CONNECTED'
@@ -185,6 +514,7 @@ async function runChannelUITest(
     const page =
       client.pupPage;
 
+
     if (!page) {
       console.log(
         '❌ Puppeteer-Seite wurde nicht gefunden.'
@@ -194,18 +524,10 @@ async function runChannelUITest(
     }
 
 
-    /*
-     * Ab hier gilt der Test als wirklich gestartet.
-     */
-
     testStarted = true;
 
 
-    /*
-     * WhatsApp noch kurz Zeit geben.
-     */
-
-    await sleep(4000);
+    await sleep(3000);
 
 
     /*
@@ -227,10 +549,7 @@ async function runChannelUITest(
           return String(
             value || ''
           )
-            .replace(
-              /\s+/g,
-              ' '
-            )
+            .replace(/\s+/g, ' ')
             .trim()
             .toLowerCase();
         }
@@ -258,28 +577,6 @@ async function runChannelUITest(
         }
 
 
-        /*
-         * 1. Direkte bekannte WhatsApp-TestID.
-         */
-
-        let target =
-          document.querySelector(
-            '[data-testid="newsletter-tab-drawer"]'
-          );
-
-
-        if (
-          target &&
-          !isVisible(target)
-        ) {
-          target = null;
-        }
-
-
-        /*
-         * Relevante klickbare Elemente sammeln.
-         */
-
         const elements =
           [
             ...document.querySelectorAll(
@@ -298,8 +595,22 @@ async function runChannelUITest(
             );
 
 
+        let target =
+          document.querySelector(
+            '[data-testid="newsletter-tab-drawer"]'
+          );
+
+
+        if (
+          target &&
+          !isVisible(target)
+        ) {
+          target = null;
+        }
+
+
         /*
-         * 2. aria-label exakt "Kanäle".
+         * aria-label "Kanäle".
          */
 
         if (!target) {
@@ -310,32 +621,14 @@ async function runChannelUITest(
                   element.getAttribute(
                     'aria-label'
                   )
-                ) === 'kanäle'
+                ) ===
+                'kanäle'
             );
         }
 
 
         /*
-         * 3. aria-label enthält "Kanäle".
-         */
-
-        if (!target) {
-          target =
-            elements.find(
-              element =>
-                normalize(
-                  element.getAttribute(
-                    'aria-label'
-                  )
-                ).includes(
-                  'kanäle'
-                )
-            );
-        }
-
-
-        /*
-         * 4. data-testid enthält newsletter-tab.
+         * data-testid.
          */
 
         if (!target) {
@@ -354,7 +647,7 @@ async function runChannelUITest(
                   testId ===
                     'newsletter-tab-drawer' ||
                   testId.includes(
-                    'newsletter-tab'
+                    'newsletter-tab-drawer'
                   )
                 );
               }
@@ -363,7 +656,23 @@ async function runChannelUITest(
 
 
         /*
-         * 5. Sichtbarer Text exakt "Kanäle".
+         * Text.
+         */
+
+        if (!target) {
+          target =
+            elements.find(
+              element =>
+                normalize(
+                  element.textContent
+                ) ===
+                'kanäle'
+            );
+        }
+
+
+        /*
+         * WhatsApps Icon "channels".
          */
 
         if (!target) {
@@ -371,15 +680,19 @@ async function runChannelUITest(
             elements.find(
               element => {
 
-                const text =
-                  normalize(
-                    element.textContent
-                  );
+                const html =
+                  (
+                    element.innerHTML ||
+                    ''
+                  )
+                    .toLowerCase();
 
                 return (
-                  text === 'kanäle' ||
-                  text.startsWith(
-                    'kanäle '
+                  html.includes(
+                    'wds-ic-channels'
+                  ) ||
+                  html.includes(
+                    'ic-channels'
                   )
                 );
               }
@@ -387,132 +700,12 @@ async function runChannelUITest(
         }
 
 
-        /*
-         * 6. Ganz breiter Fallback.
-         */
-
         if (!target) {
-          const allVisible =
-            [
-              ...document.querySelectorAll('*')
-            ]
-              .filter(
-                isVisible
-              );
-
-          target =
-            allVisible.find(
-              element => {
-
-                const aria =
-                  normalize(
-                    element.getAttribute(
-                      'aria-label'
-                    )
-                  );
-
-                const text =
-                  normalize(
-                    element.textContent
-                  );
-
-                const testId =
-                  normalize(
-                    element.getAttribute(
-                      'data-testid'
-                    )
-                  );
-
-                return (
-                  aria === 'kanäle' ||
-                  text === 'kanäle' ||
-                  testId.includes(
-                    'newsletter-tab'
-                  )
-                );
-              }
-            );
-        }
-
-
-        /*
-         * Diagnose, falls gar nichts gefunden.
-         */
-
-        if (!target) {
-          const possible =
-            elements
-              .map(
-                element => ({
-                  tag:
-                    element.tagName,
-
-                  aria:
-                    element.getAttribute(
-                      'aria-label'
-                    ),
-
-                  testId:
-                    element.getAttribute(
-                      'data-testid'
-                    ),
-
-                  role:
-                    element.getAttribute(
-                      'role'
-                    ),
-
-                  text:
-                    (
-                      element.textContent ||
-                      ''
-                    )
-                      .trim()
-                      .slice(
-                        0,
-                        120
-                      )
-                })
-              )
-              .filter(
-                item => {
-
-                  const combined =
-                    normalize(
-                      [
-                        item.aria,
-                        item.testId,
-                        item.text
-                      ]
-                        .filter(Boolean)
-                        .join(' ')
-                    );
-
-                  return (
-                    combined.includes(
-                      'kanal'
-                    ) ||
-                    combined.includes(
-                      'newsletter'
-                    )
-                  );
-                }
-              )
-              .slice(
-                0,
-                40
-              );
-
           return {
-            opened: false,
-            possible
+            opened: false
           };
         }
 
-
-        /*
-         * Anklickbares Eltern-Element bestimmen.
-         */
 
         const clickable =
           target.closest(
@@ -520,19 +713,13 @@ async function runChannelUITest(
               'button',
               '[role="button"]',
               '[role="tab"]',
-              '[tabindex]',
-              '[data-testid]'
+              '[tabindex]'
             ].join(',')
-          ) || target;
+          ) ||
+          target;
 
 
-        try {
-          clickable.click();
-        } catch {
-          try {
-            target.click();
-          } catch {}
-        }
+        clickable.click();
 
 
         return {
@@ -576,28 +763,40 @@ async function runChannelUITest(
     );
 
 
-    console.log(
-      channelAreaResult.opened
-        ? '✅ Bereich "Kanäle" angeklickt.'
-        : '⚠️ Bereich "Kanäle" nicht direkt gefunden.'
-    );
-
-
     if (
       !channelAreaResult.opened
     ) {
       console.log(
-        '🔎 Mögliche Kanal-Elemente:',
-        channelAreaResult.possible
+        '❌ Bereich "Kanäle" wurde nicht gefunden.'
       );
+
+      testStarted = false;
+
+      return;
     }
 
 
-    /*
-     * Navigation laden lassen.
-     */
+    console.log(
+      '✅ Bereich "Kanäle" angeklickt.'
+    );
 
-    await sleep(5000);
+
+    await sleep(4000);
+
+
+    /*
+    ----------------------------------------------------------
+    SCHRITT 1B:
+    EVENTUELLES WHATSAPP-POPUP SCHLIESSEN
+    ----------------------------------------------------------
+    */
+
+    await closeWhatsAppPopup(
+      page
+    );
+
+
+    await sleep(3000);
 
 
     /*
@@ -620,10 +819,7 @@ async function runChannelUITest(
             return String(
               value || ''
             )
-              .replace(
-                /\s+/g,
-                ' '
-              )
+              .replace(/\s+/g, ' ')
               .trim()
               .toLowerCase();
           }
@@ -637,10 +833,78 @@ async function runChannelUITest(
             const rect =
               element.getBoundingClientRect();
 
+            const style =
+              window.getComputedStyle(
+                element
+              );
+
             return (
               rect.width > 0 &&
-              rect.height > 0
+              rect.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden'
             );
+          }
+
+
+          function getInfo(element) {
+            const rect =
+              element.getBoundingClientRect();
+
+            return {
+              tag:
+                element.tagName,
+
+              aria:
+                element.getAttribute(
+                  'aria-label'
+                ),
+
+              testId:
+                element.getAttribute(
+                  'data-testid'
+                ),
+
+              role:
+                element.getAttribute(
+                  'role'
+                ),
+
+              text:
+                (
+                  element.textContent ||
+                  ''
+                )
+                  .replace(
+                    /\s+/g,
+                    ' '
+                  )
+                  .trim()
+                  .slice(
+                    0,
+                    250
+                  ),
+
+              width:
+                Math.round(
+                  rect.width
+                ),
+
+              height:
+                Math.round(
+                  rect.height
+                ),
+
+              left:
+                Math.round(
+                  rect.left
+                ),
+
+              top:
+                Math.round(
+                  rect.top
+                )
+            };
           }
 
 
@@ -651,19 +915,14 @@ async function runChannelUITest(
 
 
           /*
-           * Bekannte Kanal-Zellen.
+           * PRIORITÄT 1:
+           * bekannte WhatsApp-Kanal-Zellen.
            */
 
-          const cells =
+          const newsletterCells =
             [
               ...document.querySelectorAll(
-                [
-                  '[data-testid="newsletter-tab-newsletter-cell"]',
-                  '[data-testid*="newsletter"]',
-                  '[role="listitem"]',
-                  '[role="button"]',
-                  '[tabindex]'
-                ].join(',')
+                '[data-testid="newsletter-tab-newsletter-cell"]'
               )
             ]
               .filter(
@@ -672,70 +931,105 @@ async function runChannelUITest(
 
 
           let target =
-            cells.find(
-              element =>
-                normalize(
-                  element.textContent
-                ).includes(
-                  wanted
-                )
-            );
+            newsletterCells.find(
+              element => {
 
+                const text =
+                  normalize(
+                    element.textContent
+                  );
 
-          /*
-           * aria-label.
-           */
-
-          if (!target) {
-            target =
-              cells.find(
-                element =>
+                const aria =
                   normalize(
                     element.getAttribute(
                       'aria-label'
                     )
-                  ).includes(
+                  );
+
+                return (
+                  text.includes(
+                    wanted
+                  ) ||
+                  aria.includes(
                     wanted
                   )
-              );
-          }
+                );
+              }
+            );
 
 
           /*
-           * Gesamtes sichtbares DOM,
-           * aber nur exakte kurze Treffer.
+           * PRIORITÄT 2:
+           * Listitems / Buttons mit exaktem
+           * oder sehr kurzem Jorne_L1ve-Text.
            */
 
           if (!target) {
-            const allVisible =
+            const clickables =
               [
-                ...document.querySelectorAll('*')
+                ...document.querySelectorAll(
+                  [
+                    '[role="listitem"]',
+                    'button',
+                    '[role="button"]',
+                    '[tabindex]'
+                  ].join(',')
+                )
               ]
                 .filter(
                   isVisible
                 );
 
+
             target =
-              allVisible.find(
+              clickables.find(
                 element => {
+
+                  const info =
+                    getInfo(
+                      element
+                    );
 
                   const text =
                     normalize(
-                      element.textContent
+                      info.text
                     );
 
                   const aria =
                     normalize(
-                      element.getAttribute(
-                        'aria-label'
-                      )
+                      info.aria
                     );
 
-                  return (
+
+                  /*
+                   * Ganz wichtig:
+                   * keine riesigen WhatsApp-Container.
+                   */
+
+                  const reasonableSize =
+                    info.width <
+                      window.innerWidth *
+                        0.65 &&
+                    info.height <
+                      300;
+
+
+                  const nameMatch =
                     text === wanted ||
                     aria === wanted ||
                     aria ===
-                      `kanal ${wanted}`
+                      `kanal ${wanted}` ||
+                    (
+                      text.includes(
+                        wanted
+                      ) &&
+                      text.length < 180
+                    );
+
+
+                  return (
+                    reasonableSize &&
+                    nameMatch
                   );
                 }
               );
@@ -743,110 +1037,163 @@ async function runChannelUITest(
 
 
           /*
-           * Noch breiter:
-           * Element enthält Jorne_L1ve,
-           * darf aber kein riesiger Container sein.
+           * PRIORITÄT 3:
+           * Exakten Textknoten finden und anschließend
+           * auf einen kleinen klickbaren Elterncontainer gehen.
            */
 
           if (!target) {
-            const allVisible =
+            const elements =
               [
-                ...document.querySelectorAll('*')
+                ...document.querySelectorAll(
+                  'span, div'
+                )
               ]
                 .filter(
                   isVisible
                 );
 
-            target =
-              allVisible.find(
-                element => {
 
-                  const text =
-                    normalize(
-                      element.textContent
-                    );
-
-                  return (
-                    text.includes(
-                      wanted
-                    ) &&
-                    text.length < 250
-                  );
-                }
+            const textElement =
+              elements.find(
+                element =>
+                  normalize(
+                    element.textContent
+                  ) ===
+                  wanted
               );
+
+
+            if (textElement) {
+
+              let current =
+                textElement;
+
+
+              for (
+                let depth = 0;
+                depth < 6 &&
+                current;
+                depth++
+              ) {
+                const info =
+                  getInfo(
+                    current
+                  );
+
+
+                const role =
+                  current.getAttribute(
+                    'role'
+                  );
+
+
+                const testId =
+                  current.getAttribute(
+                    'data-testid'
+                  );
+
+
+                const tabindex =
+                  current.getAttribute(
+                    'tabindex'
+                  );
+
+
+                const clickable =
+                  current.tagName ===
+                    'BUTTON' ||
+                  role ===
+                    'button' ||
+                  role ===
+                    'listitem' ||
+                  tabindex !==
+                    null ||
+                  testId ===
+                    'newsletter-tab-newsletter-cell';
+
+
+                const reasonableSize =
+                  info.width <
+                    window.innerWidth *
+                      0.65 &&
+                  info.height <
+                    300;
+
+
+                if (
+                  clickable &&
+                  reasonableSize
+                ) {
+                  target =
+                    current;
+
+                  break;
+                }
+
+
+                current =
+                  current.parentElement;
+              }
+            }
           }
 
 
-          /*
-           * Diagnose.
-           */
-
           if (!target) {
+
+            /*
+             * Nur zur Diagnose:
+             * echte kleine Elemente, die "Jorne"
+             * enthalten.
+             */
+
             const possible =
-              cells
+              [
+                ...document.querySelectorAll(
+                  '*'
+                )
+              ]
+                .filter(
+                  isVisible
+                )
                 .map(
-                  element => ({
-                    tag:
-                      element.tagName,
-
-                    aria:
-                      element.getAttribute(
-                        'aria-label'
-                      ),
-
-                    testId:
-                      element.getAttribute(
-                        'data-testid'
-                      ),
-
-                    role:
-                      element.getAttribute(
-                        'role'
-                      ),
-
-                    text:
-                      (
-                        element.textContent ||
-                        ''
-                      )
-                        .trim()
-                        .slice(
-                          0,
-                          160
-                        )
-                  })
+                  getInfo
                 )
                 .filter(
-                  item => {
+                  info => {
 
-                    const combined =
+                    const text =
                       normalize(
-                        [
-                          item.aria,
-                          item.testId,
-                          item.text
-                        ]
-                          .filter(Boolean)
-                          .join(' ')
+                        info.text
+                      );
+
+                    const aria =
+                      normalize(
+                        info.aria
                       );
 
                     return (
-                      combined.includes(
-                        'jorne'
-                      ) ||
-                      combined.includes(
-                        'newsletter'
-                      ) ||
-                      combined.includes(
-                        'kanal'
-                      )
+                      (
+                        text.includes(
+                          'jorne'
+                        ) ||
+                        aria.includes(
+                          'jorne'
+                        )
+                      ) &&
+                      info.width <
+                        window.innerWidth *
+                          0.75 &&
+                      info.height <
+                        350
                     );
                   }
                 )
                 .slice(
                   0,
-                  50
+                  30
                 );
+
 
             return {
               opened: false,
@@ -855,62 +1202,42 @@ async function runChannelUITest(
           }
 
 
+          const targetInfo =
+            getInfo(
+              target
+            );
+
+
           /*
-           * Hoch zum anklickbaren Container.
+           * Noch einmal Sicherheitsprüfung.
            */
 
-          const clickable =
-            target.closest(
-              [
-                '[data-testid="newsletter-tab-newsletter-cell"]',
-                'button',
-                '[role="button"]',
-                '[role="listitem"]',
-                '[tabindex]'
-              ].join(',')
-            ) || target;
+          if (
+            targetInfo.width >=
+              window.innerWidth *
+                0.75 ||
+            targetInfo.height >=
+              400
+          ) {
+            return {
+              opened: false,
 
+              rejected:
+                targetInfo,
 
-          try {
-            clickable.click();
-          } catch {
-            try {
-              target.click();
-            } catch {}
+              reason:
+                'Treffer war zu groß und wurde aus Sicherheitsgründen nicht angeklickt.'
+            };
           }
+
+
+          target.click();
 
 
           return {
             opened: true,
-
-            tag:
-              clickable.tagName,
-
-            aria:
-              clickable.getAttribute(
-                'aria-label'
-              ),
-
-            testId:
-              clickable.getAttribute(
-                'data-testid'
-              ),
-
-            role:
-              clickable.getAttribute(
-                'role'
-              ),
-
-            text:
-              (
-                clickable.textContent ||
-                ''
-              )
-                .trim()
-                .slice(
-                  0,
-                  160
-                )
+            selected:
+              targetInfo
           };
         },
 
@@ -928,18 +1255,29 @@ async function runChannelUITest(
       !channelResult.opened
     ) {
       console.log(
-        `❌ Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`
+        `❌ Kanal "${CHANNEL_NAME}" wurde nicht sicher gefunden.`
       );
 
-      console.log(
-        '🔎 Mögliche Kanal-Zellen:',
+
+      if (
+        channelResult.rejected
+      ) {
+        console.log(
+          '⚠️ Falscher großer Treffer wurde absichtlich verworfen:',
+          channelResult.rejected
+        );
+      }
+
+
+      if (
         channelResult.possible
-      );
+      ) {
+        console.log(
+          '🔎 Mögliche Jorne-Elemente:',
+          channelResult.possible
+        );
+      }
 
-      /*
-       * Ganz wichtig:
-       * Späteren neuen Versuch erlauben.
-       */
 
       testStarted = false;
 
@@ -952,11 +1290,30 @@ async function runChannelUITest(
     );
 
 
+    console.log(
+      '🎯 Gewählte Kanal-Zelle:',
+      channelResult.selected
+    );
+
+
     /*
-     * Kanal vollständig laden.
+     * Kanaloberfläche laden lassen.
      */
 
-    await sleep(8000);
+    await sleep(7000);
+
+
+    /*
+     * Falls nach dem Öffnen noch einmal
+     * ein Popup erscheint.
+     */
+
+    await closeWhatsAppPopup(
+      page
+    );
+
+
+    await sleep(2000);
 
 
     /*
@@ -979,17 +1336,19 @@ async function runChannelUITest(
 
 
         /*
-         * DOM durchsuchen.
+         * DOM.
          */
 
         try {
           const html =
             document.documentElement.innerHTML;
 
+
           const matches =
             html.match(
               /[0-9]{5,40}@newsletter/g
             ) || [];
+
 
           for (
             const id
@@ -1002,7 +1361,7 @@ async function runChannelUITest(
 
 
         /*
-         * WhatsApp Stores durchsuchen.
+         * Stores.
          */
 
         try {
@@ -1012,6 +1371,7 @@ async function runChannelUITest(
             window.Store?.NewsletterStore
           ];
 
+
           for (
             const store
             of possibleStores
@@ -1019,11 +1379,14 @@ async function runChannelUITest(
             const models =
               store?.models || [];
 
+
             for (
               const model
               of models
             ) {
-              let id = null;
+              let id =
+                null;
+
 
               try {
                 id =
@@ -1031,6 +1394,7 @@ async function runChannelUITest(
                   model?.id?.toString?.() ||
                   null;
               } catch {}
+
 
               if (
                 id &&
@@ -1048,7 +1412,9 @@ async function runChannelUITest(
         } catch {}
 
 
-        return [...ids];
+        return [
+          ...ids
+        ];
       });
 
 
@@ -1061,7 +1427,7 @@ async function runChannelUITest(
     /*
     ----------------------------------------------------------
     SCHRITT 4:
-    EINGABEFELD SUCHEN
+    MELDUNGSFELD SUCHEN
     ----------------------------------------------------------
     */
 
@@ -1074,15 +1440,21 @@ async function runChannelUITest(
       await page.evaluate(() => {
 
         function isVisible(element) {
+
           if (!element) {
             return false;
           }
 
+
           const rect =
             element.getBoundingClientRect();
 
+
           const style =
-            window.getComputedStyle(element);
+            window.getComputedStyle(
+              element
+            );
+
 
           return (
             rect.width > 0 &&
@@ -1095,10 +1467,13 @@ async function runChannelUITest(
 
 
         function getInfo(element) {
+
           const rect =
             element.getBoundingClientRect();
 
+
           return {
+
             tag:
               element.tagName,
 
@@ -1185,247 +1560,297 @@ async function runChannelUITest(
 
 
         const selectors = [
+
           '[contenteditable="true"]',
+
           '[role="textbox"]',
+
           'textarea',
+
           'input',
+
           '[data-lexical-editor="true"]',
+
           '[data-tab]',
+
           '[data-testid*="compose"]',
+
           '[data-testid*="input"]',
+
           '[data-testid*="newsletter"]',
+
           '[aria-label*="Meldung"]',
+
           '[aria-label*="Nachricht"]',
+
           '[placeholder*="Meldung"]',
+
           '[data-placeholder*="Meldung"]'
         ];
-
-
-        const allCandidates =
-          [
-            ...document.querySelectorAll(
-              selectors.join(',')
-            )
-          ]
-            .filter(isVisible);
 
 
         const candidates =
           [
             ...new Set(
-              allCandidates
+              [
+                ...document.querySelectorAll(
+                  selectors.join(',')
+                )
+              ]
             )
-          ];
+          ]
+            .filter(
+              isVisible
+            );
 
 
         /*
-         * 1. Direkte Meldungsbezeichnungen.
+         * Direkte Textmerkmale.
          */
 
         let target =
-          candidates.find(element => {
+          candidates.find(
+            element => {
 
-            const aria =
-              (
-                element.getAttribute(
-                  'aria-label'
-                ) || ''
-              )
-                .toLowerCase();
+              const info =
+                getInfo(
+                  element
+                );
 
-            const placeholder =
-              (
-                element.getAttribute(
-                  'placeholder'
+
+              const aria =
+                (
+                  info.aria ||
+                  ''
+                )
+                  .toLowerCase();
+
+
+              const placeholder =
+                (
+                  info.placeholder ||
+                  ''
+                )
+                  .toLowerCase();
+
+
+              const text =
+                (
+                  info.text ||
+                  ''
+                )
+                  .toLowerCase();
+
+
+              return (
+                aria.includes(
+                  'gib eine meldung ein'
                 ) ||
-                element.getAttribute(
-                  'data-placeholder'
+                aria.includes(
+                  'meldung verfassen'
                 ) ||
-                ''
-              )
-                .toLowerCase();
-
-            const text =
-              (
-                element.textContent ||
-                ''
-              )
-                .trim()
-                .toLowerCase();
-
-            return (
-              aria.includes(
-                'gib eine meldung ein'
-              ) ||
-              aria.includes(
-                'meldung verfassen'
-              ) ||
-              aria.includes(
-                'meldung eingeben'
-              ) ||
-              aria.includes(
-                'nachricht eingeben'
-              ) ||
-              placeholder.includes(
-                'gib eine meldung ein'
-              ) ||
-              placeholder.includes(
-                'meldung verfassen'
-              ) ||
-              placeholder.includes(
-                'meldung eingeben'
-              ) ||
-              placeholder.includes(
-                'nachricht eingeben'
-              ) ||
-              text ===
-                'gib eine meldung ein' ||
-              text ===
-                'meldung verfassen'
-            );
-          });
+                aria.includes(
+                  'meldung eingeben'
+                ) ||
+                aria.includes(
+                  'nachricht eingeben'
+                ) ||
+                placeholder.includes(
+                  'gib eine meldung ein'
+                ) ||
+                placeholder.includes(
+                  'meldung verfassen'
+                ) ||
+                placeholder.includes(
+                  'meldung eingeben'
+                ) ||
+                placeholder.includes(
+                  'nachricht eingeben'
+                ) ||
+                text ===
+                  'gib eine meldung ein'
+              );
+            }
+          );
 
 
         /*
-         * Falls äußerer Container:
-         * echtes Feld darin verwenden.
+         * Falls Container:
+         * inneres editierbares Feld.
          */
 
         if (target) {
+
           const inner =
             target.querySelector?.(
               [
                 '[contenteditable="true"]',
                 '[role="textbox"]',
                 'textarea',
-                'input',
                 '[data-lexical-editor="true"]'
               ].join(',')
             );
+
 
           if (
             inner &&
             isVisible(inner)
           ) {
-            target = inner;
+            target =
+              inner;
           }
         }
 
 
         /*
-         * 2. Hauptbereich + untere Hälfte.
+         * Editierbares Feld im rechten
+         * Hauptbereich.
          */
 
         if (!target) {
+
           const editable =
-            candidates.filter(element => {
+            candidates.filter(
+              element => {
 
-              const info =
-                getInfo(element);
+                const info =
+                  getInfo(
+                    element
+                  );
 
-              return (
-                info.contenteditable ===
-                  'true' ||
-                info.role ===
-                  'textbox' ||
-                info.lexical ===
-                  'true' ||
-                info.tag ===
-                  'TEXTAREA'
-              );
-            });
+
+                return (
+                  info.contenteditable ===
+                    'true' ||
+                  info.role ===
+                    'textbox' ||
+                  info.lexical ===
+                    'true' ||
+                  info.tag ===
+                    'TEXTAREA'
+                );
+              }
+            );
 
 
           target =
-            editable.find(element => {
+            editable.find(
+              element => {
 
-              const info =
-                getInfo(element);
+                const info =
+                  getInfo(
+                    element
+                  );
 
-              const aria =
-                (
-                  info.aria || ''
-                ).toLowerCase();
 
-              const placeholder =
-                (
-                  info.placeholder || ''
-                ).toLowerCase();
+                const aria =
+                  (
+                    info.aria ||
+                    ''
+                  )
+                    .toLowerCase();
 
-              const isSearch =
-                aria.includes(
-                  'suchen'
-                ) ||
-                placeholder.includes(
-                  'suchen'
+
+                const placeholder =
+                  (
+                    info.placeholder ||
+                    ''
+                  )
+                    .toLowerCase();
+
+
+                const search =
+                  aria.includes(
+                    'suchen'
+                  ) ||
+                  placeholder.includes(
+                    'suchen'
+                  );
+
+
+                const rightSide =
+                  info.left >
+                    window.innerWidth *
+                      0.28;
+
+
+                const lowerArea =
+                  info.top >
+                    window.innerHeight *
+                      0.35;
+
+
+                return (
+                  !search &&
+                  rightSide &&
+                  lowerArea
                 );
-
-              const isMainArea =
-                info.left >
-                window.innerWidth *
-                  0.28;
-
-              const isLowerArea =
-                info.top >
-                window.innerHeight *
-                  0.40;
-
-              return (
-                !isSearch &&
-                isMainArea &&
-                isLowerArea
-              );
-            });
+              }
+            );
         }
 
 
         /*
-         * 3. Hauptbereich ohne Höhenbedingung.
+         * Noch breiterer Composer-Fallback.
          */
 
         if (!target) {
+
           target =
-            candidates.find(element => {
+            candidates.find(
+              element => {
 
-              const info =
-                getInfo(element);
+                const info =
+                  getInfo(
+                    element
+                  );
 
-              const aria =
-                (
-                  info.aria || ''
-                ).toLowerCase();
 
-              const placeholder =
-                (
-                  info.placeholder || ''
-                ).toLowerCase();
+                const aria =
+                  (
+                    info.aria ||
+                    ''
+                  )
+                    .toLowerCase();
 
-              const editable =
-                info.contenteditable ===
-                  'true' ||
-                info.role ===
-                  'textbox' ||
-                info.lexical ===
-                  'true' ||
-                info.tag ===
-                  'TEXTAREA';
 
-              const search =
-                aria.includes(
-                  'suchen'
-                ) ||
-                placeholder.includes(
-                  'suchen'
+                const placeholder =
+                  (
+                    info.placeholder ||
+                    ''
+                  )
+                    .toLowerCase();
+
+
+                const editable =
+                  info.contenteditable ===
+                    'true' ||
+                  info.role ===
+                    'textbox' ||
+                  info.lexical ===
+                    'true' ||
+                  info.tag ===
+                    'TEXTAREA';
+
+
+                const search =
+                  aria.includes(
+                    'suchen'
+                  ) ||
+                  placeholder.includes(
+                    'suchen'
+                  );
+
+
+                return (
+                  editable &&
+                  !search &&
+                  info.left >
+                    window.innerWidth *
+                      0.28
                 );
-
-              return (
-                editable &&
-                !search &&
-                info.left >
-                  window.innerWidth *
-                    0.28
-              );
-            });
+              }
+            );
         }
 
 
@@ -1434,15 +1859,25 @@ async function runChannelUITest(
          */
 
         const diagnosticSelectors = [
+
           '[contenteditable]',
+
           '[role]',
+
           'input',
+
           'textarea',
+
           '[aria-label]',
+
           '[placeholder]',
+
           '[data-placeholder]',
+
           '[data-testid]',
+
           '[data-tab]',
+
           '[data-lexical-editor]'
         ];
 
@@ -1457,7 +1892,9 @@ async function runChannelUITest(
               ]
             )
           ]
-            .filter(isVisible);
+            .filter(
+              isVisible
+            );
 
 
         const details =
@@ -1468,50 +1905,55 @@ async function runChannelUITest(
                 index
               ) => ({
                 index,
-                ...getInfo(element)
+                ...getInfo(
+                  element
+                )
               })
             )
-            .filter(item => {
+            .filter(
+              item => {
 
-              const joined =
-                [
-                  item.aria,
-                  item.placeholder,
-                  item.role,
-                  item.contenteditable,
-                  item.testId,
-                  item.dataTab,
-                  item.lexical,
-                  item.text
-                ]
-                  .filter(Boolean)
-                  .join(' ')
-                  .toLowerCase();
+                const joined =
+                  [
+                    item.aria,
+                    item.placeholder,
+                    item.role,
+                    item.contenteditable,
+                    item.testId,
+                    item.dataTab,
+                    item.lexical,
+                    item.text
+                  ]
+                    .filter(Boolean)
+                    .join(' ')
+                    .toLowerCase();
 
-              return (
-                joined.includes(
-                  'meldung'
-                ) ||
-                joined.includes(
-                  'nachricht'
-                ) ||
-                joined.includes(
-                  'newsletter'
-                ) ||
-                joined.includes(
-                  'compose'
-                ) ||
-                joined.includes(
-                  'textbox'
-                ) ||
-                joined.includes(
-                  'editable'
-                ) ||
-                joined.includes(
-                  'suchen'
-                )
-              );
-            })
+
+                return (
+                  joined.includes(
+                    'meldung'
+                  ) ||
+                  joined.includes(
+                    'nachricht'
+                  ) ||
+                  joined.includes(
+                    'newsletter'
+                  ) ||
+                  joined.includes(
+                    'compose'
+                  ) ||
+                  joined.includes(
+                    'textbox'
+                  ) ||
+                  joined.includes(
+                    'editable'
+                  ) ||
+                  joined.includes(
+                    'suchen'
+                  )
+                );
+              }
+            )
             .slice(
               0,
               100
@@ -1519,10 +1961,14 @@ async function runChannelUITest(
 
 
         if (!target) {
+
           return {
-            found: false,
+
+            found:
+              false,
 
             viewport: {
+
               width:
                 window.innerWidth,
 
@@ -1542,9 +1988,12 @@ async function runChannelUITest(
 
 
         return {
-          found: true,
+
+          found:
+            true,
 
           viewport: {
+
             width:
               window.innerWidth,
 
@@ -1553,7 +2002,9 @@ async function runChannelUITest(
           },
 
           selected:
-            getInfo(target),
+            getInfo(
+              target
+            ),
 
           details
         };
@@ -1569,19 +2020,20 @@ async function runChannelUITest(
     if (
       !composerInfo.found
     ) {
+
       console.log(
         '❌ Meldungsfeld wurde nicht gefunden.'
       );
 
+
       console.log(
-        '➡️ Bitte Screenshot vom kompletten Abschnitt "Composer-Diagnose" schicken.'
+        '➡️ Bitte Screenshot ab "Composer-Diagnose" schicken.'
       );
 
-      /*
-       * Späteren Versuch zulassen.
-       */
 
-      testStarted = false;
+      testStarted =
+        false;
+
 
       return;
     }
@@ -1612,11 +2064,15 @@ async function runChannelUITest(
 
 
     if (!composer) {
+
       console.log(
-        '❌ Das markierte Meldungsfeld konnte nicht erneut gefunden werden.'
+        '❌ Markiertes Meldungsfeld konnte nicht erneut gefunden werden.'
       );
 
-      testStarted = false;
+
+      testStarted =
+        false;
+
 
       return;
     }
@@ -1625,13 +2081,16 @@ async function runChannelUITest(
     await composer.click();
 
 
-    await sleep(500);
+    await sleep(
+      500
+    );
 
 
     await page.keyboard.type(
       TEST_MESSAGE,
       {
-        delay: 40
+        delay:
+          40
       }
     );
 
@@ -1641,7 +2100,9 @@ async function runChannelUITest(
     );
 
 
-    await sleep(2000);
+    await sleep(
+      2000
+    );
 
 
     /*
@@ -1661,24 +2122,32 @@ async function runChannelUITest(
     );
 
 
-    await sleep(4000);
+    await sleep(
+      4000
+    );
 
+
+    /*
+     * Prüfen, ob Testtext sichtbar wurde.
+     */
 
     const messageVisible =
       await page.evaluate(
         testMessage => {
 
           return [
-            ...document.querySelectorAll('*')
+            ...document.querySelectorAll(
+              '*'
+            )
           ].some(
             element =>
               (
                 element.textContent ||
                 ''
-              ).trim() ===
+              )
+                .trim() ===
               testMessage
           );
-
         },
 
         TEST_MESSAGE
@@ -1687,8 +2156,10 @@ async function runChannelUITest(
 
     console.log(
       messageVisible
-        ? '✅ Testtext ist anschließend in der Oberfläche sichtbar.'
-        : '⚠️ Testtext wurde nach ENTER nicht eindeutig in der Oberfläche gefunden.'
+        ?
+        '✅ Testtext ist anschließend in der Oberfläche sichtbar.'
+        :
+        '⚠️ Testtext wurde nach ENTER nicht eindeutig gefunden.'
     );
 
 
@@ -1696,41 +2167,50 @@ async function runChannelUITest(
       '================================'
     );
 
+
     console.log(
       '🎉 UI-SENDEVERSUCH ABGESCHLOSSEN'
     );
 
+
     console.log(
       `➡️ Bitte WhatsApp-Kanal prüfen: "${TEST_MESSAGE}"`
     );
+
 
     console.log(
       '================================'
     );
 
   } catch (error) {
+
     console.log(
       '================================'
     );
+
 
     console.error(
       '❌ FEHLER IM KANAL-UI-TEST'
     );
 
-    console.error(error);
+
+    console.error(
+      error
+    );
+
 
     console.log(
       '================================'
     );
 
-    /*
-     * Bei technischem Fehler erneuten Versuch zulassen.
-     */
 
-    testStarted = false;
+    testStarted =
+      false;
 
   } finally {
-    testRunning = false;
+
+    testRunning =
+      false;
   }
 }
 
@@ -1750,7 +2230,8 @@ async function startBot() {
   fs.mkdirSync(
     AUTH_DATA_PATH,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
@@ -1781,11 +2262,12 @@ async function startBot() {
 
 
   /*
-   * Store erstellen.
+   * Store.
    */
 
   const store =
     new FixedMongoStore({
+
       mongoose,
 
       dataPath:
@@ -1794,12 +2276,14 @@ async function startBot() {
 
 
   /*
-   * Gespeicherte Sitzung prüfen.
+   * Sitzung prüfen.
    */
 
   try {
+
     const exists =
       await store.sessionExists({
+
         session:
           `RemoteAuth-${CLIENT_ID}`
       });
@@ -1811,6 +2295,7 @@ async function startBot() {
     );
 
   } catch (error) {
+
     console.log(
       '⚠️ MongoDB-Sitzungsstatus konnte nicht geprüft werden:',
       error.message
@@ -1863,15 +2348,23 @@ async function startBot() {
           true,
 
         args: [
+
           '--no-sandbox',
+
           '--disable-setuid-sandbox',
+
           '--disable-dev-shm-usage',
+
           '--window-size=1365,900'
         ],
 
         defaultViewport: {
-          width: 1365,
-          height: 900
+
+          width:
+            1365,
+
+          height:
+            900
         }
       }
     });
@@ -1892,11 +2385,16 @@ async function startBot() {
         '================================'
       );
 
+
       console.log(
         '📱 WHATSAPP KOPPLUNGSCODE:'
       );
 
-      console.log(code);
+
+      console.log(
+        code
+      );
+
 
       console.log(
         '================================'
@@ -1925,10 +2423,13 @@ async function startBot() {
       );
 
 
-      await sleep(7000);
+      await sleep(
+        7000
+      );
 
 
       try {
+
         const state =
           await client.getState();
 
@@ -1940,12 +2441,15 @@ async function startBot() {
 
 
         if (
-          state === 'CONNECTED'
+          state ===
+          'CONNECTED'
         ) {
+
           await runChannelUITest(
             client,
             'READY-Event'
           );
+
 
           return;
         }
@@ -1953,10 +2457,13 @@ async function startBot() {
       } catch {}
 
 
-      await sleep(7000);
+      await sleep(
+        7000
+      );
 
 
       try {
+
         const state =
           await client.getState();
 
@@ -1968,8 +2475,10 @@ async function startBot() {
 
 
         if (
-          state === 'CONNECTED'
+          state ===
+          'CONNECTED'
         ) {
+
           await runChannelUITest(
             client,
             'READY + Wartezeit'
@@ -1977,6 +2486,7 @@ async function startBot() {
         }
 
       } catch (error) {
+
         console.log(
           '⚠️ Status nach READY konnte nicht geprüft werden:',
           error.message
@@ -1997,25 +2507,28 @@ async function startBot() {
 
 
       if (
-        state === 'CONNECTED' &&
+        state ===
+          'CONNECTED' &&
         !testStarted &&
         !testRunning
       ) {
+
         setTimeout(
           () => {
 
             runChannelUITest(
               client,
               'change_state = CONNECTED'
-            ).catch(
-              error => {
+            )
+              .catch(
+                error => {
 
-                console.error(
-                  '❌ CONNECTED-Test fehlgeschlagen:',
-                  error
-                );
-              }
-            );
+                  console.error(
+                    '❌ CONNECTED-Test fehlgeschlagen:',
+                    error
+                  );
+                }
+              );
           },
 
           5000
@@ -2078,6 +2591,7 @@ async function startBot() {
 
 
       try {
+
         const state =
           await client.getState();
 
@@ -2089,8 +2603,10 @@ async function startBot() {
 
 
         if (
-          state === 'CONNECTED'
+          state ===
+          'CONNECTED'
         ) {
+
           await runChannelUITest(
             client,
             '60-Sekunden-CONNECTED'
@@ -2098,6 +2614,7 @@ async function startBot() {
         }
 
       } catch (error) {
+
         console.error(
           '❌ 60-Sekunden-Prüfung fehlgeschlagen:',
           error
@@ -2135,8 +2652,14 @@ startBot().catch(
       '❌ STARTFEHLER:'
     );
 
-    console.error(error);
 
-    process.exit(1);
+    console.error(
+      error
+    );
+
+
+    process.exit(
+      1
+    );
   }
 );
