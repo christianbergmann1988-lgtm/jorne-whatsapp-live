@@ -23,7 +23,6 @@ FIX FÜR REMOTEAUTH + MONGODB
 class FixedMongoStore extends MongoStore {
   constructor({ mongoose, dataPath }) {
     super({ mongoose });
-
     this.fixedMongoose = mongoose;
     this.dataPath = dataPath;
   }
@@ -56,8 +55,7 @@ class FixedMongoStore extends MongoStore {
       );
 
     await new Promise((resolve, reject) => {
-      const readStream =
-        fs.createReadStream(zipPath);
+      const readStream = fs.createReadStream(zipPath);
 
       const uploadStream =
         bucket.openUploadStream(
@@ -100,7 +98,7 @@ class FixedMongoStore extends MongoStore {
 
 /*
 ============================================================
-KLEINE WARTEFUNKTION
+WARTEFUNKTION
 ============================================================
 */
 
@@ -111,7 +109,7 @@ function sleep(ms) {
 
 /*
 ============================================================
-KANAL DIREKT ÜBER WHATSAPP-WEB-OBERFLÄCHE ÖFFNEN
+KANAL ÜBER DIE WHATSAPP-WEB-OBERFLÄCHE ÖFFNEN
 ============================================================
 */
 
@@ -150,7 +148,6 @@ async function runChannelUITest(client, reason) {
       console.log(
         '❌ Puppeteer-Seite wurde nicht gefunden.'
       );
-
       return;
     }
 
@@ -167,13 +164,11 @@ async function runChannelUITest(client, reason) {
 
     const channelAreaOpened =
       await page.evaluate(() => {
-
         const elements =
           [...document.querySelectorAll('*')];
 
         const target =
           elements.find(element => {
-
             const aria =
               element
                 .getAttribute('aria-label')
@@ -202,13 +197,11 @@ async function runChannelUITest(client, reason) {
         return true;
       });
 
-
     console.log(
       channelAreaOpened
         ? '✅ Bereich "Kanäle" angeklickt.'
         : '⚠️ Bereich "Kanäle" nicht direkt gefunden.'
     );
-
 
     await sleep(4000);
 
@@ -223,16 +216,9 @@ async function runChannelUITest(client, reason) {
       `🔎 Suche Kanal "${CHANNEL_NAME}"...`
     );
 
-
     const channelOpened =
       await page.evaluate(
         channelName => {
-
-          /*
-           * Bevorzugt den bereits von unserer Diagnose
-           * gefundenen WhatsApp-TestID.
-           */
-
           const channelCells =
             [
               ...document.querySelectorAll(
@@ -246,19 +232,12 @@ async function runChannelUITest(client, reason) {
                 ?.includes(channelName)
             );
 
-
-          /*
-           * Falls WhatsApp den TestID ändert:
-           * über sichtbaren Text suchen.
-           */
-
           if (!target) {
             const elements =
               [...document.querySelectorAll('*')];
 
             target =
               elements.find(element => {
-
                 const text =
                   element.textContent?.trim();
 
@@ -274,65 +253,49 @@ async function runChannelUITest(client, reason) {
               });
           }
 
-
           if (!target) {
             return false;
           }
-
 
           const clickable =
             target.closest(
               '[data-testid="newsletter-tab-newsletter-cell"],button,[role="button"],[role="listitem"],[tabindex]'
             ) || target;
 
-
           clickable.click();
 
           return true;
         },
-
         CHANNEL_NAME
       );
-
 
     if (!channelOpened) {
       console.log(
         `❌ Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`
       );
-
       return;
     }
-
 
     console.log(
       `✅ Kanal "${CHANNEL_NAME}" wurde geöffnet.`
     );
-
 
     await sleep(5000);
 
 
     /*
     ----------------------------------------------------------
-    SCHRITT 3 – mögliche Newsletter-ID suchen
+    SCHRITT 3 – Newsletter-ID suchen
     ----------------------------------------------------------
     */
 
     console.log(
-      '🔎 Suche zusätzlich nach einer @newsletter-ID...'
+      '🔎 Suche nach einer @newsletter-ID...'
     );
-
 
     const newsletterInfo =
       await page.evaluate(() => {
-
-        const ids =
-          new Set();
-
-
-        /*
-         * DOM durchsuchen
-         */
+        const ids = new Set();
 
         const html =
           document.documentElement.innerHTML;
@@ -342,14 +305,7 @@ async function runChannelUITest(client, reason) {
             /\d{8,30}@newsletter/g
           ) || [];
 
-        matches.forEach(id =>
-          ids.add(id)
-        );
-
-
-        /*
-         * WhatsApp Store durchsuchen
-         */
+        matches.forEach(id => ids.add(id));
 
         try {
           const collection =
@@ -359,7 +315,6 @@ async function runChannelUITest(client, reason) {
             collection?.models || [];
 
           for (const model of models) {
-
             let id = null;
 
             try {
@@ -371,21 +326,15 @@ async function runChannelUITest(client, reason) {
 
             if (
               id &&
-              String(id).includes(
-                '@newsletter'
-              )
+              String(id).includes('@newsletter')
             ) {
-              ids.add(
-                String(id)
-              );
+              ids.add(String(id));
             }
           }
         } catch {}
 
-
         return [...ids];
       });
-
 
     console.log(
       '📺 Gefundene Newsletter-IDs:',
@@ -403,10 +352,8 @@ async function runChannelUITest(client, reason) {
       '🔎 Suche Meldungs-Eingabefeld...'
     );
 
-
     const composerInfo =
       await page.evaluate(() => {
-
         const candidates =
           [
             ...document.querySelectorAll(
@@ -419,10 +366,8 @@ async function runChannelUITest(client, reason) {
             )
           ];
 
-
         const visible =
           candidates.filter(element => {
-
             const rect =
               element.getBoundingClientRect();
 
@@ -432,21 +377,15 @@ async function runChannelUITest(client, reason) {
             );
           });
 
-
         const details =
           visible.map(
             (element, index) => ({
-
               index,
-
-              tag:
-                element.tagName,
-
+              tag: element.tagName,
               aria:
                 element.getAttribute(
                   'aria-label'
                 ),
-
               placeholder:
                 element.getAttribute(
                   'placeholder'
@@ -454,17 +393,14 @@ async function runChannelUITest(client, reason) {
                 element.getAttribute(
                   'data-placeholder'
                 ),
-
               role:
                 element.getAttribute(
                   'role'
                 ),
-
               contenteditable:
                 element.getAttribute(
                   'contenteditable'
                 ),
-
               text:
                 (
                   element.textContent ||
@@ -475,15 +411,8 @@ async function runChannelUITest(client, reason) {
             })
           );
 
-
-        /*
-         * Suche zuerst explizit nach
-         * "Meldung", "Nachricht" etc.
-         */
-
         let target =
           visible.find(element => {
-
             const aria =
               (
                 element.getAttribute(
@@ -510,18 +439,9 @@ async function runChannelUITest(client, reason) {
             );
           });
 
-
-        /*
-         * Falls WhatsApp keine passende Beschriftung liefert:
-         * sichtbares ContentEditable nehmen,
-         * aber Suchfelder ausschließen.
-         */
-
         if (!target) {
-
           target =
             visible.find(element => {
-
               if (
                 element.getAttribute(
                   'contenteditable'
@@ -530,14 +450,12 @@ async function runChannelUITest(client, reason) {
                 return false;
               }
 
-
               const aria =
                 (
                   element.getAttribute(
                     'aria-label'
                   ) || ''
                 ).toLowerCase();
-
 
               const placeholder =
                 (
@@ -550,14 +468,12 @@ async function runChannelUITest(client, reason) {
                   ''
                 ).toLowerCase();
 
-
               return (
                 !aria.includes('suchen') &&
                 !placeholder.includes('suchen')
               );
             });
         }
-
 
         if (!target) {
           return {
@@ -566,24 +482,18 @@ async function runChannelUITest(client, reason) {
           };
         }
 
-
         target.setAttribute(
           'data-bot-composer',
           'true'
         );
 
-
         return {
           found: true,
-
-          tag:
-            target.tagName,
-
+          tag: target.tagName,
           aria:
             target.getAttribute(
               'aria-label'
             ),
-
           placeholder:
             target.getAttribute(
               'placeholder'
@@ -591,31 +501,26 @@ async function runChannelUITest(client, reason) {
             target.getAttribute(
               'data-placeholder'
             ),
-
           role:
             target.getAttribute(
               'role'
             ),
-
           contenteditable:
             target.getAttribute(
               'contenteditable'
             ),
-
           details
         };
       });
-
 
     console.log(
       '📝 Composer-Diagnose:',
       composerInfo
     );
 
-
     if (!composerInfo.found) {
       console.log(
-        '❌ Meldungsfeld wurde noch nicht gefunden.'
+        '❌ Meldungsfeld wurde nicht gefunden.'
       );
 
       console.log(
@@ -624,7 +529,6 @@ async function runChannelUITest(client, reason) {
 
       return;
     }
-
 
     console.log(
       '✅ Meldungsfeld gefunden!'
@@ -642,18 +546,14 @@ async function runChannelUITest(client, reason) {
         '[data-bot-composer="true"]'
       );
 
-
     if (!composer) {
       console.log(
-        '❌ Gefundenes Meldungsfeld konnte nicht ausgewählt werden.'
+        '❌ Meldungsfeld konnte nicht ausgewählt werden.'
       );
-
       return;
     }
 
-
     await composer.click();
-
 
     await page.keyboard.type(
       TEST_MESSAGE,
@@ -662,11 +562,9 @@ async function runChannelUITest(client, reason) {
       }
     );
 
-
     console.log(
       `⌨️ Text eingegeben: "${TEST_MESSAGE}"`
     );
-
 
     await sleep(1500);
 
@@ -681,14 +579,11 @@ async function runChannelUITest(client, reason) {
       'Enter'
     );
 
-
     console.log(
       '📤 ENTER gedrückt.'
     );
 
-
     await sleep(3000);
-
 
     console.log('================================');
     console.log(
@@ -699,17 +594,12 @@ async function runChannelUITest(client, reason) {
     );
     console.log('================================');
 
-
   } catch (error) {
-
     console.log('================================');
-
     console.error(
       '❌ FEHLER IM KANAL-UI-TEST'
     );
-
     console.error(error);
-
     console.log('================================');
   }
 }
@@ -722,7 +612,6 @@ BOT START
 */
 
 async function startBot() {
-
   fs.mkdirSync(
     AUTH_DATA_PATH,
     {
@@ -730,27 +619,22 @@ async function startBot() {
     }
   );
 
-
   console.log(
     '📁 RemoteAuth-Ordner bereit:',
     AUTH_DATA_PATH
   );
 
-
   console.log(
     'Verbinde mit MongoDB...'
   );
-
 
   await mongoose.connect(
     process.env.MONGODB_URI
   );
 
-
   console.log(
     '✅ MongoDB verbunden.'
   );
-
 
   const store =
     new FixedMongoStore({
@@ -759,15 +643,12 @@ async function startBot() {
         AUTH_DATA_PATH
     });
 
-
   try {
-
     const exists =
       await store.sessionExists({
         session:
           `RemoteAuth-${CLIENT_ID}`
       });
-
 
     console.log(
       '🗄️ Gespeicherte MongoDB-Sitzung vorhanden:',
@@ -775,54 +656,39 @@ async function startBot() {
     );
 
   } catch (error) {
-
     console.log(
       '⚠️ MongoDB-Sitzungsstatus konnte nicht geprüft werden:',
       error.message
     );
   }
 
-
   const client =
     new Client({
-
       authStrategy:
         new RemoteAuth({
-
           clientId:
             CLIENT_ID,
-
           store,
-
           dataPath:
             AUTH_DATA_PATH,
-
           backupSyncIntervalMs:
             60000,
-
           rmMaxRetries:
             10
         }),
 
-
       pairWithPhoneNumber: {
-
         phoneNumber:
           process.env.WHATSAPP_PHONE,
-
         showNotification:
           true,
-
         intervalMs:
           180000
       },
 
-
       puppeteer: {
-
         headless:
           true,
-
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -835,7 +701,6 @@ async function startBot() {
   client.on(
     'code',
     code => {
-
       console.log('================================');
       console.log(
         '📱 WHATSAPP KOPPLUNGSCODE:'
@@ -845,29 +710,23 @@ async function startBot() {
     }
   );
 
-
   client.on(
     'authenticated',
     () => {
-
       console.log(
         '✅ WhatsApp erfolgreich angemeldet.'
       );
     }
   );
 
-
   client.on(
     'ready',
     async () => {
-
       console.log(
         '✅ WhatsApp READY-Event erhalten.'
       );
 
-
       await sleep(5000);
-
 
       await runChannelUITest(
         client,
@@ -876,11 +735,9 @@ async function startBot() {
     }
   );
 
-
   client.on(
     'change_state',
     state => {
-
       console.log(
         '🔄 WhatsApp Statusänderung:',
         state
@@ -888,22 +745,18 @@ async function startBot() {
     }
   );
 
-
   client.on(
     'remote_session_saved',
     () => {
-
       console.log(
         '💾 REMOTE SESSION SAVED.'
       );
     }
   );
 
-
   client.on(
     'auth_failure',
     message => {
-
       console.error(
         '❌ WhatsApp-Anmeldung fehlgeschlagen:',
         message
@@ -911,11 +764,9 @@ async function startBot() {
     }
   );
 
-
   client.on(
     'disconnected',
     reason => {
-
       console.log(
         '⚠️ WhatsApp getrennt:',
         reason
@@ -923,35 +774,24 @@ async function startBot() {
     }
   );
 
-
-  /*
-   * Falls READY einmal wieder nicht kommt,
-   * versuchen wir es nach 60 Sekunden bei CONNECTED.
-   */
-
   setTimeout(
     async () => {
-
       if (testStarted) {
         return;
       }
 
       try {
-
         const state =
           await client.getState();
-
 
         console.log(
           '⏰ 60-Sekunden-Status:',
           state
         );
 
-
         if (
           state === 'CONNECTED'
         ) {
-
           await runChannelUITest(
             client,
             '60-Sekunden-CONNECTED'
@@ -959,22 +799,18 @@ async function startBot() {
         }
 
       } catch (error) {
-
         console.error(
           '❌ 60-Sekunden-Prüfung fehlgeschlagen:',
           error
         );
       }
     },
-
     60000
   );
-
 
   console.log(
     '🚀 WhatsApp wird gestartet...'
   );
-
 
   await client.initialize();
 }
@@ -988,7 +824,6 @@ START
 
 startBot().catch(
   error => {
-
     console.error(
       '❌ STARTFEHLER:'
     );
