@@ -3,10 +3,228 @@ const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 
 const CHANNEL_INVITE_CODE = '0029Vb9AGcELikg6ValudB0f';
-const TEST_MESSAGE = 'BOT-TEST AUTOMATISCH 2';
+const TEST_MESSAGE = 'BOT-TEST AUTOMATISCH CONNECTED';
 
-let readyReached = false;
-let diagnosticTimerStarted = false;
+let testStarted = false;
+
+async function runChannelTest(client, reason) {
+  if (testStarted) {
+    return;
+  }
+
+  testStarted = true;
+
+  console.log('================================');
+  console.log('🚀 STARTE KANAL-TEST');
+  console.log('Auslöser:', reason);
+  console.log('================================');
+
+  try {
+    const state = await client.getState();
+    console.log('📡 WhatsApp-Verbindungsstatus:', state);
+
+    if (state !== 'CONNECTED') {
+      console.log(
+        '❌ WhatsApp ist noch nicht CONNECTED. Kanal-Test wird nicht gestartet.'
+      );
+      testStarted = false;
+      return;
+    }
+
+    console.log('✅ WhatsApp ist CONNECTED.');
+
+    try {
+      const version = await client.getWWebVersion();
+
+      console.log(
+        '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
+        version
+      );
+    } catch (error) {
+      console.log(
+        '⚠️ WhatsApp-Web-Version konnte nicht gelesen werden.'
+      );
+    }
+
+    console.log('--------------------------------');
+    console.log('🔍 Prüfe verfügbare Channel-Funktionen...');
+
+    console.log(
+      'getChannelByInviteCode:',
+      typeof client.getChannelByInviteCode
+    );
+
+    console.log(
+      'getChannels:',
+      typeof client.getChannels
+    );
+
+    console.log('--------------------------------');
+
+    /*
+     * WEG 1:
+     * Direkte Suche über den Einladungs-Code.
+     */
+    if (typeof client.getChannelByInviteCode === 'function') {
+      console.log(
+        '🔎 Suche Jorne_L1ve über den WhatsApp-Kanal-Link...'
+      );
+
+      const channel =
+        await client.getChannelByInviteCode(
+          CHANNEL_INVITE_CODE
+        );
+
+      if (!channel) {
+        console.log(
+          '❌ getChannelByInviteCode() lieferte keinen Kanal.'
+        );
+      } else {
+        console.log('================================');
+        console.log('🎯 KANAL GEFUNDEN!');
+
+        console.log(
+          'Name:',
+          channel.name || 'unbekannt'
+        );
+
+        console.log(
+          'ID:',
+          channel.id?._serialized ||
+          channel.id ||
+          'unbekannt'
+        );
+
+        console.log(
+          'sendMessage:',
+          typeof channel.sendMessage
+        );
+
+        console.log('================================');
+
+        if (typeof channel.sendMessage === 'function') {
+          console.log(
+            `📤 Sende: "${TEST_MESSAGE}"`
+          );
+
+          const message =
+            await channel.sendMessage(TEST_MESSAGE);
+
+          console.log('================================');
+          console.log('🎉 TESTNACHRICHT GESENDET!');
+
+          console.log(
+            'Nachrichten-ID:',
+            message?.id?._serialized ||
+            'nicht verfügbar'
+          );
+
+          console.log('================================');
+          return;
+        }
+
+        console.log(
+          '❌ Der gefundene Kanal besitzt keine sendMessage()-Funktion.'
+        );
+      }
+    } else {
+      console.log(
+        '⚠️ getChannelByInviteCode() ist in dieser installierten whatsapp-web.js-Version nicht vorhanden.'
+      );
+    }
+
+    /*
+     * WEG 2:
+     * Falls vorhanden, gecachte Kanäle auslesen.
+     */
+    if (typeof client.getChannels === 'function') {
+      console.log('🔎 Versuche getChannels()...');
+
+      const channels = await client.getChannels();
+
+      console.log(
+        '📺 Anzahl gefundener Kanäle:',
+        channels.length
+      );
+
+      channels.forEach((channel, index) => {
+        console.log(
+          `Kanal ${index + 1}:`,
+          channel.name || 'ohne Name',
+          '| ID:',
+          channel.id?._serialized ||
+          channel.id ||
+          'unbekannt'
+        );
+      });
+
+      const jorne = channels.find(channel =>
+        channel.name === 'Jorne_L1ve'
+      );
+
+      if (jorne) {
+        console.log('================================');
+        console.log(
+          '🎯 Jorne_L1ve über getChannels() gefunden!'
+        );
+
+        console.log(
+          'ID:',
+          jorne.id?._serialized ||
+          jorne.id ||
+          'unbekannt'
+        );
+
+        console.log(
+          'sendMessage:',
+          typeof jorne.sendMessage
+        );
+
+        console.log('================================');
+
+        if (typeof jorne.sendMessage === 'function') {
+          console.log(
+            `📤 Sende: "${TEST_MESSAGE}"`
+          );
+
+          const message =
+            await jorne.sendMessage(TEST_MESSAGE);
+
+          console.log('================================');
+          console.log('🎉 TESTNACHRICHT GESENDET!');
+
+          console.log(
+            'Nachrichten-ID:',
+            message?.id?._serialized ||
+            'nicht verfügbar'
+          );
+
+          console.log('================================');
+          return;
+        }
+      }
+    } else {
+      console.log(
+        '⚠️ Auch getChannels() ist in dieser Version nicht vorhanden.'
+      );
+    }
+
+    console.log('================================');
+    console.log(
+      '⚠️ DIREKTER CHANNEL-TEST NICHT MÖGLICH.'
+    );
+    console.log(
+      'WhatsApp selbst ist CONNECTED, aber die installierte Bibliothek stellt die benötigte Channel-Funktion nicht erfolgreich bereit.'
+    );
+    console.log('================================');
+
+  } catch (error) {
+    console.log('================================');
+    console.error('❌ FEHLER BEIM KANAL-TEST');
+    console.error(error);
+    console.log('================================');
+  }
+}
 
 async function startBot() {
   console.log('Verbinde mit MongoDB...');
@@ -48,55 +266,15 @@ async function startBot() {
 
   client.on('authenticated', () => {
     console.log('✅ WhatsApp erfolgreich angemeldet.');
+  });
 
-    if (diagnosticTimerStarted) return;
-    diagnosticTimerStarted = true;
+  client.on('ready', async () => {
+    console.log('✅ WhatsApp READY-Event erhalten.');
 
-    console.log(
-      '⏳ Warte maximal 60 Sekunden auf den READY-Status...'
+    await runChannelTest(
+      client,
+      'READY-Event'
     );
-
-    setTimeout(async () => {
-      if (readyReached) return;
-
-      console.log('================================');
-      console.log('🔎 60-SEKUNDEN-DIAGNOSE');
-      console.log('================================');
-
-      try {
-        const state = await client.getState();
-
-        console.log(
-          '📡 Aktueller WhatsApp-Verbindungsstatus:',
-          state
-        );
-      } catch (error) {
-        console.error(
-          '❌ getState() konnte nicht ausgeführt werden:',
-          error
-        );
-      }
-
-      try {
-        const version = await client.getWWebVersion();
-
-        console.log(
-          '📦 Tatsächlich verwendete WhatsApp-Web-Version:',
-          version
-        );
-      } catch (error) {
-        console.error(
-          '❌ Web-Version konnte nicht gelesen werden:',
-          error
-        );
-      }
-
-      console.log(
-        '⚠️ READY wurde innerhalb von 60 Sekunden nicht erreicht.'
-      );
-
-      console.log('================================');
-    }, 60000);
   });
 
   client.on('change_state', (state) => {
@@ -104,6 +282,15 @@ async function startBot() {
       '🔄 WhatsApp Statusänderung:',
       state
     );
+
+    if (state === 'CONNECTED') {
+      setTimeout(() => {
+        runChannelTest(
+          client,
+          'change_state = CONNECTED'
+        );
+      }, 5000);
+    }
   });
 
   client.on('remote_session_saved', () => {
@@ -126,85 +313,40 @@ async function startBot() {
     );
   });
 
-  client.on('ready', async () => {
-    readyReached = true;
-
-    console.log('================================');
-    console.log('✅ WHATSAPP-BOT IST BEREIT!');
-    console.log('================================');
+  /*
+   * Sicherheitsnetz:
+   * Auch wenn weder READY noch change_state sauber ausgelöst werden,
+   * prüfen wir nach 60 Sekunden den tatsächlichen Status.
+   */
+  setTimeout(async () => {
+    if (testStarted) {
+      return;
+    }
 
     try {
       const state = await client.getState();
 
+      console.log('================================');
+      console.log('⏰ 60-SEKUNDEN-CHECK');
       console.log(
-        '📡 Verbindungsstatus:',
+        '📡 Aktueller Status:',
         state
       );
+      console.log('================================');
+
+      if (state === 'CONNECTED') {
+        await runChannelTest(
+          client,
+          '60-Sekunden-Check = CONNECTED'
+        );
+      }
     } catch (error) {
       console.error(
-        '⚠️ Status konnte nicht gelesen werden:',
+        '❌ Statusprüfung nach 60 Sekunden fehlgeschlagen:',
         error
       );
     }
-
-    try {
-      const version = await client.getWWebVersion();
-
-      console.log(
-        '📦 WhatsApp-Web-Version:',
-        version
-      );
-
-      console.log(
-        '🔎 Suche Kanal über Einladungs-Code...'
-      );
-
-      const channel =
-        await client.getChannelByInviteCode(
-          CHANNEL_INVITE_CODE
-        );
-
-      if (!channel) {
-        console.error(
-          '❌ Kanal wurde nicht gefunden.'
-        );
-        return;
-      }
-
-      console.log('================================');
-      console.log('🎯 KANAL GEFUNDEN!');
-      console.log('Name:', channel.name);
-      console.log(
-        'ID:',
-        channel.id?._serialized ||
-        channel.id ||
-        'unbekannt'
-      );
-      console.log('================================');
-
-      console.log(
-        `📤 Sende Testnachricht: "${TEST_MESSAGE}"`
-      );
-
-      const message =
-        await channel.sendMessage(TEST_MESSAGE);
-
-      console.log('================================');
-      console.log('🎉 TESTNACHRICHT GESENDET!');
-      console.log(
-        'Nachrichten-ID:',
-        message?.id?._serialized ||
-        'nicht verfügbar'
-      );
-      console.log('================================');
-
-    } catch (error) {
-      console.error(
-        '❌ Kanal-Test fehlgeschlagen:'
-      );
-      console.error(error);
-    }
-  });
+  }, 60000);
 
   console.log('🚀 WhatsApp wird gestartet...');
 
