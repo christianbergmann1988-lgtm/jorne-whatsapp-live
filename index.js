@@ -30,6 +30,12 @@ const TIKTOK_TIMEOUT_MS = 20000;
 
 const WHATSAPP_READY_TIMEOUT_MS = 90000;
 
+/*
+ * Wie lange WhatsApp nach READY stabil sein soll,
+ * bevor wir die Kanaloberfläche bedienen.
+ */
+const WHATSAPP_STABLE_MS = 10000;
+
 
 /*
 ============================================================
@@ -54,6 +60,19 @@ const TikTokStateSchema =
       changedAt: {
         type: Date,
         default: Date.now
+      },
+
+      /*
+       * Nur zur Diagnose.
+       */
+      whatsappSent: {
+        type: Boolean,
+        default: false
+      },
+
+      whatsappError: {
+        type: String,
+        default: null
       }
     },
     {
@@ -102,6 +121,77 @@ async function setOfflineState() {
     {
       $set: {
         live: false,
+        whatsappSent: false,
+        whatsappError: null,
+        changedAt: new Date()
+      }
+    },
+
+    {
+      upsert: true
+    }
+  );
+}
+
+
+/*
+============================================================
+WHATSAPP-ERFOLG SPEICHERN
+============================================================
+*/
+
+async function setWhatsAppSuccess() {
+
+  await TikTokState.updateOne(
+    {
+      username: TIKTOK_USERNAME
+    },
+
+    {
+      $set: {
+        live: true,
+        whatsappSent: true,
+        whatsappError: null,
+        changedAt: new Date()
+      }
+    },
+
+    {
+      upsert: true
+    }
+  );
+}
+
+
+/*
+============================================================
+WHATSAPP-FEHLER SPEICHERN
+
+WICHTIG:
+LIVE BLEIBT TRUE.
+
+Damit wird NICHT jede Minute erneut WhatsApp gestartet.
+============================================================
+*/
+
+async function setWhatsAppFailure(
+  error
+) {
+
+  await TikTokState.updateOne(
+    {
+      username: TIKTOK_USERNAME
+    },
+
+    {
+      $set: {
+        live: true,
+        whatsappSent: false,
+        whatsappError:
+          String(
+            error?.message ||
+            error
+          ),
         changedAt: new Date()
       }
     },
@@ -116,17 +206,10 @@ async function setOfflineState() {
 /*
 ============================================================
 LIVE-START ATOMAR RESERVIEREN
-
-Verhindert möglichst, dass zwei gleichzeitig gestartete
-GitHub-Runs dieselbe LIVE-Meldung doppelt schicken.
 ============================================================
 */
 
 async function claimNewLiveStart() {
-
-  /*
-   * Existierenden OFFLINE-Eintrag auf LIVE setzen.
-   */
 
   const result =
     await TikTokState.findOneAndUpdate(
@@ -138,6 +221,8 @@ async function claimNewLiveStart() {
       {
         $set: {
           live: true,
+          whatsappSent: false,
+          whatsappError: null,
           changedAt: new Date()
         }
       },
@@ -153,10 +238,6 @@ async function claimNewLiveStart() {
   }
 
 
-  /*
-   * Vielleicht existiert noch gar kein Eintrag.
-   */
-
   const existing =
     await TikTokState
       .findOne({
@@ -166,24 +247,17 @@ async function claimNewLiveStart() {
 
 
   if (existing) {
-
-    /*
-     * Bereits LIVE gespeichert.
-     */
-
     return false;
   }
 
-
-  /*
-   * Erster Eintrag überhaupt.
-   */
 
   try {
 
     await TikTokState.create({
       username: TIKTOK_USERNAME,
       live: true,
+      whatsappSent: false,
+      whatsappError: null,
       changedAt: new Date()
     });
 
@@ -191,11 +265,6 @@ async function claimNewLiveStart() {
     return true;
 
   } catch (error) {
-
-    /*
-     * Falls gleichzeitig ein zweiter Run
-     * denselben Eintrag angelegt hat.
-     */
 
     if (
       error?.code === 11000
@@ -456,11 +525,6 @@ TIKTOK EINMAL PRÜFEN
 
 async function checkTikTokLive() {
 
-  /*
-   * tiktok-live-connector wird dynamisch geladen,
-   * weil unsere Datei CommonJS verwendet.
-   */
-
   const module =
     await import(
       'tiktok-live-connector'
@@ -521,13 +585,149 @@ async function checkTikTokLive() {
 
       await connection.disconnect();
 
-    } catch {
-
-      /*
-       * Keine aktive Verbindung.
-       */
-    }
+    } catch {}
   }
+}
+
+
+/*
+============================================================
+PRÜFEN, OB PUPPETEER NOCH LEBT
+============================================================
+*/
+
+function assertPageAlive(
+  page,
+  step
+) {
+
+  if (!page) {
+
+    throw new Error(
+      `WhatsApp-Seite fehlt bei "${step}".`
+    );
+  }
+
+
+  if (
+    typeof page.isClosed === 'function' &&
+    page.isClosed()
+  ) {
+
+    throw new Error(
+      `WhatsApp/Puppeteer-Seite wurde bei "${step}" geschlossen.`
+    );
+  }
+}
+
+
+/*
+============================================================
+AUF STABILES WHATSAPP WARTEN
+============================================================
+*/
+
+async function waitForStableWhatsApp(
+  client
+) {
+
+  console.log(
+    '⏳ Warte, bis WhatsApp Web stabil ist...'
+  );
+
+
+  const started =
+    Date.now();
+
+
+  let stableSince =
+    null;
+
+
+  while (
+    Date.now() - started <
+    WHATSAPP_READY_TIMEOUT_MS
+  ) {
+
+    let state =
+      null;
+
+
+    try {
+
+      state =
+        await client.getState();
+
+    } catch {}
+
+
+    const page =
+      client.pupPage;
+
+
+    const pageAlive =
+      page &&
+      (
+        typeof page.isClosed !== 'function' ||
+        !page.isClosed()
+      );
+
+
+    if (
+      state === 'CONNECTED' &&
+      pageAlive
+    ) {
+
+      if (!stableSince) {
+
+        stableSince =
+          Date.now();
+
+
+        console.log(
+          '🟢 WhatsApp CONNECTED – Stabilitätsprüfung läuft...'
+        );
+      }
+
+
+      if (
+        Date.now() -
+        stableSince >=
+        WHATSAPP_STABLE_MS
+      ) {
+
+        console.log(
+          `✅ WhatsApp seit ${WHATSAPP_STABLE_MS / 1000} Sekunden stabil CONNECTED.`
+        );
+
+
+        return;
+      }
+
+    } else {
+
+      if (stableSince) {
+
+        console.log(
+          '⚠️ WhatsApp wurde während der Stabilitätsprüfung kurz instabil.'
+        );
+      }
+
+
+      stableSince =
+        null;
+    }
+
+
+    await sleep(
+      1000
+    );
+  }
+
+
+  throw new Error(
+    'WhatsApp wurde nicht dauerhaft stabil CONNECTED.'
+  );
 }
 
 
@@ -540,6 +740,12 @@ WHATSAPP-POPUP SCHLIESSEN
 async function closeWhatsAppPopup(
   page
 ) {
+
+  assertPageAlive(
+    page,
+    'Popup-Prüfung'
+  );
+
 
   console.log(
     '🔎 Prüfe auf WhatsApp-Popup...'
@@ -702,15 +908,12 @@ async function closeWhatsAppPopup(
                 aria.includes(
                   'schließen'
                 ) ||
-                aria ===
-                  'close' ||
+                aria === 'close' ||
                 testId.includes(
                   'close'
                 ) ||
-                text ===
-                  'schließen' ||
-                text ===
-                  'close' ||
+                text === 'schließen' ||
+                text === 'close' ||
                 html.includes(
                   'ic-close'
                 ) ||
@@ -818,6 +1021,12 @@ RECHTE KANALANSICHT PRÜFEN
 async function inspectRightChannelArea(
   page
 ) {
+
+  assertPageAlive(
+    page,
+    'Kanalansicht prüfen'
+  );
+
 
   return await page.evaluate(
     channelName => {
@@ -971,16 +1180,16 @@ async function openWhatsAppChannel(
   page
 ) {
 
+  assertPageAlive(
+    page,
+    'Kanäle öffnen'
+  );
+
+
   console.log(
     '🔎 Suche Bereich "Kanäle"...'
   );
 
-
-  /*
-  ----------------------------------------------------------
-  KANÄLE-BUTTON MARKIEREN
-  ----------------------------------------------------------
-  */
 
   const channelsFound =
     await page.evaluate(
@@ -1190,6 +1399,12 @@ async function openWhatsAppChannel(
   );
 
 
+  assertPageAlive(
+    page,
+    'Kanäle-Button klicken'
+  );
+
+
   await channelsButton.click({
     delay: 120
   });
@@ -1205,6 +1420,12 @@ async function openWhatsAppChannel(
   );
 
 
+  assertPageAlive(
+    page,
+    'nach Kanäle-Klick'
+  );
+
+
   await closeWhatsAppPopup(
     page
   );
@@ -1214,12 +1435,6 @@ async function openWhatsAppChannel(
     2500
   );
 
-
-  /*
-  ----------------------------------------------------------
-  JORNE_L1VE MARKIEREN
-  ----------------------------------------------------------
-  */
 
   console.log(
     `🔎 Suche Kanal "${CHANNEL_NAME}"...`
@@ -1412,10 +1627,11 @@ async function openWhatsAppChannel(
   }
 
 
-  /*
-   * Echter Maus-Klick.
-   * Genau damit hat unser Test funktioniert.
-   */
+  assertPageAlive(
+    page,
+    'Kanal anklicken'
+  );
+
 
   await page.mouse.click(
 
@@ -1441,6 +1657,12 @@ async function openWhatsAppChannel(
   );
 
 
+  assertPageAlive(
+    page,
+    'nach Kanal-Klick'
+  );
+
+
   await closeWhatsAppPopup(
     page
   );
@@ -1456,11 +1678,6 @@ async function openWhatsAppChannel(
       page
     );
 
-
-  /*
-   * Falls erster Klick nicht reicht,
-   * genau einmal erneut klicken.
-   */
 
   if (
     check.emptyState &&
@@ -1485,6 +1702,12 @@ async function openWhatsAppChannel(
 
 
       if (secondBox) {
+
+        assertPageAlive(
+          page,
+          'zweiter Kanal-Klick'
+        );
+
 
         await page.mouse.click(
 
@@ -1552,6 +1775,12 @@ async function markComposer(
   page
 ) {
 
+  assertPageAlive(
+    page,
+    'Composer suchen'
+  );
+
+
   const found =
     await page.evaluate(
       () => {
@@ -1597,11 +1826,6 @@ async function markComposer(
           );
 
 
-        /*
-         * Beim erfolgreichen Test wurde
-         * dieses data-testid erkannt.
-         */
-
         let target =
           document.querySelector(
             '[data-testid="conversation-compose-box-input"]'
@@ -1619,10 +1843,6 @@ async function markComposer(
             null;
         }
 
-
-        /*
-         * Fallback.
-         */
 
         if (!target) {
 
@@ -1730,6 +1950,12 @@ async function typeMultilineMessage(
   message
 ) {
 
+  assertPageAlive(
+    page,
+    'Text eingeben'
+  );
+
+
   const lines =
     message.split(
       '\n'
@@ -1762,10 +1988,6 @@ async function typeMultilineMessage(
       index <
       lines.length - 1
     ) {
-
-      /*
-       * Zeilenumbruch ohne Absenden.
-       */
 
       await page.keyboard.down(
         'Shift'
@@ -1813,12 +2035,10 @@ async function sendLiveMessage(
     client.pupPage;
 
 
-  if (!page) {
-
-    throw new Error(
-      'Puppeteer-Seite wurde nicht gefunden.'
-    );
-  }
+  assertPageAlive(
+    page,
+    'Sendevorgang starten'
+  );
 
 
   console.log(
@@ -1876,6 +2096,12 @@ async function sendLiveMessage(
   );
 
 
+  assertPageAlive(
+    page,
+    'Composer anklicken'
+  );
+
+
   await composer.click({
     delay: 100
   });
@@ -1902,9 +2128,11 @@ async function sendLiveMessage(
   );
 
 
-  /*
-   * Erst jetzt wirklich absenden.
-   */
+  assertPageAlive(
+    page,
+    'Meldung absenden'
+  );
+
 
   await page.keyboard.press(
     'Enter'
@@ -1917,12 +2145,75 @@ async function sendLiveMessage(
 
 
   await sleep(
-    4000
+    5000
+  );
+
+
+  assertPageAlive(
+    page,
+    'nach dem Absenden'
+  );
+
+
+  const visible =
+    await page.evaluate(
+      message => {
+
+        const wanted =
+          String(
+            message
+          )
+            .replace(
+              /\s+/g,
+              ' '
+            )
+            .trim();
+
+
+        return [
+          ...document.querySelectorAll(
+            '*'
+          )
+        ].some(
+          element => {
+
+            const text =
+              (
+                element.textContent ||
+                ''
+              )
+                .replace(
+                  /\s+/g,
+                  ' '
+                )
+                .trim();
+
+
+            return (
+              text === wanted ||
+              text.includes(
+                'Jorne ist jetzt LIVE auf TikTok!'
+              )
+            );
+          }
+        );
+      },
+
+      LIVE_MESSAGE
+    );
+
+
+  console.log(
+    visible
+      ?
+      '✅ Live-Meldung ist in der WhatsApp-Oberfläche sichtbar.'
+      :
+      '⚠️ Meldung wurde nicht eindeutig in der Oberfläche wiedergefunden.'
   );
 
 
   console.log(
-    '🎉 WhatsApp-Live-Meldung wurde abgesendet.'
+    '🎉 WhatsApp-Sendevorgang abgeschlossen.'
   );
 }
 
@@ -1992,6 +2283,10 @@ async function startWhatsAppAndSend(
 
           '--disable-dev-shm-usage',
 
+          '--disable-gpu',
+
+          '--no-zygote',
+
           '--window-size=1365,900'
         ],
 
@@ -2005,32 +2300,16 @@ async function startWhatsAppAndSend(
     });
 
 
+  let readySeen =
+    false;
+
+
   const readyPromise =
     new Promise(
       (
         resolve,
         reject
       ) => {
-
-        let resolved =
-          false;
-
-
-        const finishReady =
-          () => {
-
-            if (resolved) {
-              return;
-            }
-
-
-            resolved =
-              true;
-
-
-            resolve();
-          };
-
 
         client.on(
           'authenticated',
@@ -2047,12 +2326,24 @@ async function startWhatsAppAndSend(
           'ready',
           () => {
 
+            /*
+             * READY kann mehrfach kommen.
+             * Das ist okay.
+             */
+
             console.log(
               '✅ WhatsApp READY-Event erhalten.'
             );
 
 
-            finishReady();
+            if (!readySeen) {
+
+              readySeen =
+                true;
+
+
+              resolve();
+            }
           }
         );
 
@@ -2065,23 +2356,6 @@ async function startWhatsAppAndSend(
               '🔄 WhatsApp Statusänderung:',
               state
             );
-
-
-            if (
-              state ===
-              'CONNECTED'
-            ) {
-
-              /*
-               * Bei uns kam CONNECTED teilweise
-               * auch ohne READY zuverlässig.
-               */
-
-              setTimeout(
-                finishReady,
-                3000
-              );
-            }
           }
         );
 
@@ -2129,12 +2403,18 @@ async function startWhatsAppAndSend(
           'disconnected',
           reason => {
 
-            if (!resolved) {
+            if (!readySeen) {
 
               reject(
                 new Error(
-                  `WhatsApp wurde getrennt: ${reason}`
+                  `WhatsApp wurde vor READY getrennt: ${reason}`
                 )
+              );
+            } else {
+
+              console.log(
+                '⚠️ WhatsApp getrennt:',
+                reason
               );
             }
           }
@@ -2155,25 +2435,13 @@ async function startWhatsAppAndSend(
 
 
   /*
-   * Initialisierung im Hintergrund starten.
+   * WICHTIG:
+   * initialize() nicht einfach verschwinden lassen.
    */
 
-  client
-    .initialize()
-    .catch(
-      error => {
+  const initializePromise =
+    client.initialize();
 
-        console.error(
-          '❌ WhatsApp-Initialisierung:',
-          error
-        );
-      }
-    );
-
-
-  /*
-   * Maximal 90 Sekunden warten.
-   */
 
   await withTimeout(
 
@@ -2181,72 +2449,32 @@ async function startWhatsAppAndSend(
 
     WHATSAPP_READY_TIMEOUT_MS,
 
-    'WhatsApp wurde innerhalb von 90 Sekunden nicht bereit.'
+    'WhatsApp wurde innerhalb von 90 Sekunden nicht READY.'
   );
 
 
   /*
-   * Sicherstellen, dass CONNECTED.
+   * Nach READY nicht sofort loslegen.
+   * Erst auf eine wirklich stabile Seite warten.
    */
 
-  let state =
-    null;
+  await waitForStableWhatsApp(
+    client
+  );
 
 
-  for (
-    let attempt = 1;
-    attempt <= 10;
-    attempt++
-  ) {
-
-    try {
-
-      state =
-        await client.getState();
-
-    } catch {}
+  const page =
+    client.pupPage;
 
 
-    if (
-      state === 'CONNECTED'
-    ) {
-
-      break;
-    }
-
-
-    await sleep(
-      2000
-    );
-  }
-
-
-  if (
-    state !== 'CONNECTED'
-  ) {
-
-    try {
-      await client.destroy();
-    } catch {}
-
-
-    throw new Error(
-      `WhatsApp ist nach dem Start nicht CONNECTED: ${state}`
-    );
-  }
+  assertPageAlive(
+    page,
+    'nach WhatsApp-Stabilisierung'
+  );
 
 
   console.log(
-    '✅ WhatsApp ist CONNECTED.'
-  );
-
-
-  /*
-   * Oberfläche kurz stabilisieren.
-   */
-
-  await sleep(
-    4000
+    '✅ WhatsApp Web ist bereit für den Sendeversuch.'
   );
 
 
@@ -2259,11 +2487,50 @@ async function startWhatsAppAndSend(
   } finally {
 
     /*
-     * Dieser GitHub-Run soll danach ENDEN.
+     * Nur kurz warten.
+     * Der eigentliche Beitrag wurde bereits abgesendet.
      */
 
     await sleep(
-      3000
+      2500
+    );
+
+
+    /*
+     * initialize() kann intern noch etwas nacharbeiten.
+     * Wir verhindern hier einen unhandled rejection.
+     */
+
+    initializePromise.catch(
+      error => {
+
+        const message =
+          String(
+            error?.message ||
+            error
+          );
+
+
+        if (
+          message.includes(
+            'Target closed'
+          )
+        ) {
+
+          console.log(
+            '⚠️ Puppeteer meldete beim Beenden "Target closed".'
+          );
+
+
+          return;
+        }
+
+
+        console.log(
+          '⚠️ WhatsApp initialize():',
+          message
+        );
+      }
     );
 
 
@@ -2295,10 +2562,6 @@ EINMALIGER GITHUB-CHECK
 
 async function main() {
 
-  /*
-   * Secrets.
-   */
-
   if (
     !process.env.MONGODB_URI
   ) {
@@ -2319,10 +2582,6 @@ async function main() {
   }
 
 
-  /*
-   * MongoDB verbinden.
-   */
-
   console.log(
     'Verbinde mit MongoDB...'
   );
@@ -2337,10 +2596,6 @@ async function main() {
     '✅ MongoDB verbunden.'
   );
 
-
-  /*
-   * TikTok genau EINMAL prüfen.
-   */
 
   const currentLive =
     await checkTikTokLive();
@@ -2383,7 +2638,7 @@ async function main() {
 
 
       console.log(
-        '➡️ Beim nächsten Live-Start wird wieder eine WhatsApp-Meldung gesendet.'
+        '➡️ Beim nächsten Live-Start darf wieder genau eine WhatsApp-Meldung ausgelöst werden.'
       );
 
     } else {
@@ -2405,7 +2660,7 @@ async function main() {
 
   /*
   ==========================================================
-  LIVE
+  BEREITS LIVE
   ==========================================================
   */
 
@@ -2420,12 +2675,12 @@ async function main() {
 
 
     console.log(
-      '✅ Die Live-Meldung wurde bereits ausgelöst.'
+      '✅ Dieser Live-Start wurde bereits verarbeitet.'
     );
 
 
     console.log(
-      '✅ Keine zweite WhatsApp-Nachricht.'
+      '✅ Kein weiterer WhatsApp-Sendeversuch.'
     );
 
 
@@ -2443,13 +2698,6 @@ async function main() {
     '🔴 NEUER TIKTOK-LIVE-START ERKANNT!'
   );
 
-
-  /*
-   * LIVE atomar reservieren.
-   *
-   * Falls zwischenzeitlich ein anderer GitHub-Run
-   * schneller war, wird hier false geliefert.
-   */
 
   const claimed =
     await claimNewLiveStart();
@@ -2475,10 +2723,6 @@ async function main() {
     '🔒 Live-Start für diesen Workflow reserviert.'
   );
 
-
-  /*
-   * WhatsApp-Store.
-   */
 
   fs.mkdirSync(
     AUTH_DATA_PATH,
@@ -2522,15 +2766,14 @@ async function main() {
   }
 
 
-  /*
-   * WhatsApp nur bei NEUEM LIVE starten.
-   */
-
   try {
 
     await startWhatsAppAndSend(
       store
     );
+
+
+    await setWhatsAppSuccess();
 
 
     console.log(
@@ -2550,21 +2793,49 @@ async function main() {
   } catch (error) {
 
     /*
-     * Senden fehlgeschlagen:
-     * LIVE wieder freigeben, damit der nächste
-     * Minuten-Run einen neuen Versuch machen kann.
+     * GANZ WICHTIG:
+     *
+     * Wir setzen LIVE hier NICHT wieder auf OFFLINE.
+     *
+     * Sonst würde der Cronjob jede Minute WhatsApp erneut
+     * öffnen und du bekämst wieder ständig Benachrichtigungen.
      */
 
-    await setOfflineState();
-
-
-    console.error(
-      '❌ WhatsApp-Live-Meldung fehlgeschlagen.'
+    await setWhatsAppFailure(
+      error
     );
 
 
     console.error(
-      '➡️ LIVE-Status wurde wieder freigegeben, damit der nächste Run erneut versucht.'
+      '================================'
+    );
+
+
+    console.error(
+      '❌ WHATSAPP-LIVE-MELDUNG FEHLGESCHLAGEN'
+    );
+
+
+    console.error(
+      String(
+        error?.stack ||
+        error
+      )
+    );
+
+
+    console.error(
+      '⚠️ Live-Status bleibt absichtlich auf LIVE.'
+    );
+
+
+    console.error(
+      '✅ Deshalb wird dieser Live-Start NICHT jede Minute erneut ausgelöst.'
+    );
+
+
+    console.error(
+      '================================'
     );
 
 
