@@ -21,6 +21,12 @@ const LIVE_MESSAGE =
   `👉 Direkt zum Live:\n` +
   `https://www.tiktok.com/@${TIKTOK_USERNAME}/live`;
 
+const LIVE_MESSAGE_PHRASE =
+  'Jorne ist jetzt LIVE auf TikTok!';
+
+const LIVE_URL =
+  `https://www.tiktok.com/@${TIKTOK_USERNAME}/live`;
+
 const CLIENT_ID = 'jorne-whatsapp-live';
 
 const AUTH_DATA_PATH =
@@ -30,10 +36,6 @@ const TIKTOK_TIMEOUT_MS = 20000;
 
 const WHATSAPP_READY_TIMEOUT_MS = 90000;
 
-/*
- * Wie lange WhatsApp nach READY stabil sein soll,
- * bevor wir die Kanaloberfläche bedienen.
- */
 const WHATSAPP_STABLE_MS = 10000;
 
 
@@ -62,9 +64,6 @@ const TikTokStateSchema =
         default: Date.now
       },
 
-      /*
-       * Nur zur Diagnose.
-       */
       whatsappSent: {
         type: Boolean,
         default: false
@@ -73,6 +72,36 @@ const TikTokStateSchema =
       whatsappError: {
         type: String,
         default: null
+      },
+
+      /*
+       * Daten zur eindeutig vom Bot erzeugten
+       * WhatsApp-Kanalmeldung.
+       */
+
+      botMessageKeyType: {
+        type: String,
+        default: null
+      },
+
+      botMessageKeyValue: {
+        type: String,
+        default: null
+      },
+
+      botMessagePrePlainText: {
+        type: String,
+        default: null
+      },
+
+      botMessageSentAt: {
+        type: Date,
+        default: null
+      },
+
+      deletePending: {
+        type: Boolean,
+        default: false
       }
     },
     {
@@ -89,7 +118,13 @@ const TikTokState =
   );
 
 
-async function getSavedLiveState() {
+/*
+============================================================
+GESPEICHERTEN STATUS HOLEN
+============================================================
+*/
+
+async function getSavedState() {
 
   const state =
     await TikTokState
@@ -99,9 +134,17 @@ async function getSavedLiveState() {
       .lean();
 
 
-  return Boolean(
-    state?.live
-  );
+  return state || {
+    username: TIKTOK_USERNAME,
+    live: false,
+    whatsappSent: false,
+    whatsappError: null,
+    botMessageKeyType: null,
+    botMessageKeyValue: null,
+    botMessagePrePlainText: null,
+    botMessageSentAt: null,
+    deletePending: false
+  };
 }
 
 
@@ -111,7 +154,69 @@ OFFLINE SPEICHERN
 ============================================================
 */
 
-async function setOfflineState() {
+async function setOfflineState(
+  {
+    deletionSuccessful = false
+  } = {}
+) {
+
+  const update = {
+
+    live: false,
+
+    whatsappError: null,
+
+    changedAt: new Date()
+  };
+
+
+  /*
+   * Nur wenn die Bot-Meldung tatsächlich
+   * entfernt wurde oder gar keine existiert,
+   * löschen wir ihre gespeicherten Daten.
+   */
+
+  if (
+    deletionSuccessful
+  ) {
+
+    update.whatsappSent = false;
+
+    update.botMessageKeyType = null;
+
+    update.botMessageKeyValue = null;
+
+    update.botMessagePrePlainText = null;
+
+    update.botMessageSentAt = null;
+
+    update.deletePending = false;
+  }
+
+
+  await TikTokState.updateOne(
+    {
+      username: TIKTOK_USERNAME
+    },
+
+    {
+      $set: update
+    },
+
+    {
+      upsert: true
+    }
+  );
+}
+
+
+/*
+============================================================
+LÖSCHEN VORMERKEN
+============================================================
+*/
+
+async function markDeletePending() {
 
   await TikTokState.updateOne(
     {
@@ -121,8 +226,7 @@ async function setOfflineState() {
     {
       $set: {
         live: false,
-        whatsappSent: false,
-        whatsappError: null,
+        deletePending: true,
         changedAt: new Date()
       }
     },
@@ -140,7 +244,9 @@ WHATSAPP-ERFOLG SPEICHERN
 ============================================================
 */
 
-async function setWhatsAppSuccess() {
+async function setWhatsAppSuccess(
+  messageIdentity
+) {
 
   await TikTokState.updateOne(
     {
@@ -149,10 +255,32 @@ async function setWhatsAppSuccess() {
 
     {
       $set: {
+
         live: true,
+
         whatsappSent: true,
+
         whatsappError: null,
-        changedAt: new Date()
+
+        botMessageKeyType:
+          messageIdentity?.keyType ||
+          null,
+
+        botMessageKeyValue:
+          messageIdentity?.keyValue ||
+          null,
+
+        botMessagePrePlainText:
+          messageIdentity?.prePlainText ||
+          null,
+
+        botMessageSentAt:
+          new Date(),
+
+        deletePending: false,
+
+        changedAt:
+          new Date()
       }
     },
 
@@ -166,11 +294,6 @@ async function setWhatsAppSuccess() {
 /*
 ============================================================
 WHATSAPP-FEHLER SPEICHERN
-
-WICHTIG:
-LIVE BLEIBT TRUE.
-
-Damit wird NICHT jede Minute erneut WhatsApp gestartet.
 ============================================================
 */
 
@@ -185,14 +308,26 @@ async function setWhatsAppFailure(
 
     {
       $set: {
+
+        /*
+         * Ganz wichtig:
+         * LIVE bleibt TRUE.
+         *
+         * Sonst würde jede Minute wieder versucht.
+         */
+
         live: true,
+
         whatsappSent: false,
+
         whatsappError:
           String(
             error?.message ||
             error
           ),
-        changedAt: new Date()
+
+        changedAt:
+          new Date()
       }
     },
 
@@ -220,10 +355,15 @@ async function claimNewLiveStart() {
 
       {
         $set: {
+
           live: true,
+
           whatsappSent: false,
+
           whatsappError: null,
-          changedAt: new Date()
+
+          changedAt:
+            new Date()
         }
       },
 
@@ -234,6 +374,7 @@ async function claimNewLiveStart() {
 
 
   if (result) {
+
     return true;
   }
 
@@ -247,6 +388,7 @@ async function claimNewLiveStart() {
 
 
   if (existing) {
+
     return false;
   }
 
@@ -254,11 +396,21 @@ async function claimNewLiveStart() {
   try {
 
     await TikTokState.create({
-      username: TIKTOK_USERNAME,
-      live: true,
-      whatsappSent: false,
-      whatsappError: null,
-      changedAt: new Date()
+
+      username:
+        TIKTOK_USERNAME,
+
+      live:
+        true,
+
+      whatsappSent:
+        false,
+
+      whatsappError:
+        null,
+
+      changedAt:
+        new Date()
     });
 
 
@@ -269,6 +421,7 @@ async function claimNewLiveStart() {
     if (
       error?.code === 11000
     ) {
+
       return false;
     }
 
@@ -437,7 +590,7 @@ class FixedMongoStore extends MongoStore {
 
 /*
 ============================================================
-HILFSFUNKTION
+HILFSFUNKTIONEN
 ============================================================
 */
 
@@ -452,12 +605,6 @@ function sleep(ms) {
   );
 }
 
-
-/*
-============================================================
-TIMEOUT
-============================================================
-*/
 
 function withTimeout(
   promise,
@@ -519,7 +666,7 @@ function withTimeout(
 
 /*
 ============================================================
-TIKTOK EINMAL PRÜFEN
+TIKTOK PRÜFEN
 ============================================================
 */
 
@@ -592,7 +739,7 @@ async function checkTikTokLive() {
 
 /*
 ============================================================
-PRÜFEN, OB PUPPETEER NOCH LEBT
+PUPPETEER PRÜFEN
 ============================================================
 */
 
@@ -706,14 +853,6 @@ async function waitForStableWhatsApp(
 
     } else {
 
-      if (stableSince) {
-
-        console.log(
-          '⚠️ WhatsApp wurde während der Stabilitätsprüfung kurz instabil.'
-        );
-      }
-
-
       stableSince =
         null;
     }
@@ -747,11 +886,6 @@ async function closeWhatsAppPopup(
   );
 
 
-  console.log(
-    '🔎 Prüfe auf WhatsApp-Popup...'
-  );
-
-
   const result =
     await page.evaluate(
       () => {
@@ -761,13 +895,13 @@ async function closeWhatsAppPopup(
         ) {
 
           if (!element) {
+
             return false;
           }
 
 
           const rect =
-            element
-              .getBoundingClientRect();
+            element.getBoundingClientRect();
 
 
           const style =
@@ -878,17 +1012,6 @@ async function closeWhatsAppPopup(
                   .toLowerCase();
 
 
-              const testId =
-                (
-                  element.getAttribute(
-                    'data-testid'
-                  ) ||
-                  ''
-                )
-                  .trim()
-                  .toLowerCase();
-
-
               const text =
                 getText(
                   element
@@ -908,17 +1031,14 @@ async function closeWhatsAppPopup(
                 aria.includes(
                   'schließen'
                 ) ||
-                aria === 'close' ||
-                testId.includes(
-                  'close'
-                ) ||
-                text === 'schließen' ||
-                text === 'close' ||
+                aria ===
+                  'close' ||
+                text ===
+                  'schließen' ||
+                text ===
+                  'close' ||
                 html.includes(
                   'ic-close'
-                ) ||
-                html.includes(
-                  'wds-ic-close'
                 )
               );
             }
@@ -971,12 +1091,6 @@ async function closeWhatsAppPopup(
     );
 
 
-  console.log(
-    '🪟 Popup-Prüfung:',
-    result
-  );
-
-
   if (
     result.found &&
     result.closed
@@ -1014,7 +1128,7 @@ async function closeWhatsAppPopup(
 
 /*
 ============================================================
-RECHTE KANALANSICHT PRÜFEN
+KANALANSICHT PRÜFEN
 ============================================================
 */
 
@@ -1031,38 +1145,8 @@ async function inspectRightChannelArea(
   return await page.evaluate(
     channelName => {
 
-      function isVisible(
-        element
-      ) {
-
-        if (!element) {
-          return false;
-        }
-
-
-        const rect =
-          element
-            .getBoundingClientRect();
-
-
-        const style =
-          window.getComputedStyle(
-            element
-          );
-
-
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden'
-        );
-      }
-
-
-      const channelNameLower =
-        channelName
-          .toLowerCase();
+      const channel =
+        channelName.toLowerCase();
 
 
       const pageText =
@@ -1086,82 +1170,67 @@ async function inspectRightChannelArea(
         );
 
 
-      const rightElements =
+      const rightText =
         [
           ...document.querySelectorAll(
-            [
-              '[data-testid]',
-              '[aria-label]',
-              '[role]',
-              'header',
-              'main',
-              'section',
-              'div'
-            ].join(',')
+            '*'
           )
         ]
-          .filter(
-            isVisible
-          )
           .filter(
             element => {
 
               const rect =
-                element
-                  .getBoundingClientRect();
+                element.getBoundingClientRect();
 
 
               return (
+                rect.width > 0 &&
+                rect.height > 0 &&
                 rect.left >
-                window.innerWidth *
-                  0.32
+                  window.innerWidth *
+                    0.32
+              );
+            }
+          )
+          .some(
+            element => {
+
+              const text =
+                (
+                  element.textContent ||
+                  ''
+                )
+                  .toLowerCase();
+
+
+              const aria =
+                (
+                  element.getAttribute(
+                    'aria-label'
+                  ) ||
+                  ''
+                )
+                  .toLowerCase();
+
+
+              return (
+                text.includes(
+                  channel
+                ) ||
+                aria.includes(
+                  channel
+                )
               );
             }
           );
 
 
-      const channelNameVisibleRight =
-        rightElements.some(
-          element => {
-
-            const text =
-              (
-                element.textContent ||
-                ''
-              )
-                .replace(
-                  /\s+/g,
-                  ' '
-                )
-                .trim()
-                .toLowerCase();
-
-
-            const aria =
-              (
-                element.getAttribute(
-                  'aria-label'
-                ) ||
-                ''
-              )
-                .toLowerCase();
-
-
-            return (
-              text.includes(
-                channelNameLower
-              ) ||
-              aria.includes(
-                channelNameLower
-              )
-            );
-          }
-        );
-
-
       return {
+
         emptyState,
-        channelNameVisibleRight
+
+        channelNameVisibleRight:
+          rightText
       };
     },
 
@@ -1217,13 +1286,13 @@ async function openWhatsAppChannel(
         ) {
 
           if (!element) {
+
             return false;
           }
 
 
           const rect =
-            element
-              .getBoundingClientRect();
+            element.getBoundingClientRect();
 
 
           return (
@@ -1383,28 +1452,6 @@ async function openWhatsAppChannel(
   }
 
 
-  await channelsButton.evaluate(
-    element => {
-
-      element.scrollIntoView({
-        block: 'center',
-        inline: 'center'
-      });
-    }
-  );
-
-
-  await sleep(
-    500
-  );
-
-
-  assertPageAlive(
-    page,
-    'Kanäle-Button klicken'
-  );
-
-
   await channelsButton.click({
     delay: 120
   });
@@ -1417,12 +1464,6 @@ async function openWhatsAppChannel(
 
   await sleep(
     4500
-  );
-
-
-  assertPageAlive(
-    page,
-    'nach Kanäle-Klick'
   );
 
 
@@ -1467,13 +1508,13 @@ async function openWhatsAppChannel(
         ) {
 
           if (!element) {
+
             return false;
           }
 
 
           const rect =
-            element
-              .getBoundingClientRect();
+            element.getBoundingClientRect();
 
 
           return (
@@ -1548,8 +1589,7 @@ async function openWhatsAppChannel(
 
 
         const rect =
-          target
-            .getBoundingClientRect();
+          target.getBoundingClientRect();
 
 
         if (
@@ -1599,22 +1639,6 @@ async function openWhatsAppChannel(
   }
 
 
-  await channelHandle.evaluate(
-    element => {
-
-      element.scrollIntoView({
-        block: 'center',
-        inline: 'center'
-      });
-    }
-  );
-
-
-  await sleep(
-    700
-  );
-
-
   const box =
     await channelHandle.boundingBox();
 
@@ -1625,12 +1649,6 @@ async function openWhatsAppChannel(
       'Keine Klickposition für Jorne_L1ve verfügbar.'
     );
   }
-
-
-  assertPageAlive(
-    page,
-    'Kanal anklicken'
-  );
 
 
   await page.mouse.click(
@@ -1654,12 +1672,6 @@ async function openWhatsAppChannel(
 
   await sleep(
     5000
-  );
-
-
-  assertPageAlive(
-    page,
-    'nach Kanal-Klick'
   );
 
 
@@ -1702,12 +1714,6 @@ async function openWhatsAppChannel(
 
 
       if (secondBox) {
-
-        assertPageAlive(
-          page,
-          'zweiter Kanal-Klick'
-        );
-
 
         await page.mouse.click(
 
@@ -1775,12 +1781,6 @@ async function markComposer(
   page
 ) {
 
-  assertPageAlive(
-    page,
-    'Composer suchen'
-  );
-
-
   const found =
     await page.evaluate(
       () => {
@@ -1790,13 +1790,13 @@ async function markComposer(
         ) {
 
           if (!element) {
+
             return false;
           }
 
 
           const rect =
-            element
-              .getBoundingClientRect();
+            element.getBoundingClientRect();
 
 
           const style =
@@ -1866,8 +1866,7 @@ async function markComposer(
               element => {
 
                 const rect =
-                  element
-                    .getBoundingClientRect();
+                  element.getBoundingClientRect();
 
 
                 const aria =
@@ -1931,17 +1930,12 @@ async function markComposer(
       'Meldungsfeld wurde nicht gefunden.'
     );
   }
-
-
-  console.log(
-    '✅ WhatsApp-Meldungsfeld gefunden.'
-  );
 }
 
 
 /*
 ============================================================
-MEHRZEILIGE MELDUNG EINGEBEN
+MEHRZEILIGE MELDUNG
 ============================================================
 */
 
@@ -1949,12 +1943,6 @@ async function typeMultilineMessage(
   page,
   message
 ) {
-
-  assertPageAlive(
-    page,
-    'Text eingeben'
-  );
-
 
   const lines =
     message.split(
@@ -1976,7 +1964,6 @@ async function typeMultilineMessage(
 
       await page.keyboard.type(
         line,
-
         {
           delay: 25
         }
@@ -2004,6 +1991,218 @@ async function typeMultilineMessage(
       );
     }
   }
+}
+
+
+/*
+============================================================
+BOT-MELDUNG IDENTIFIZIEREN
+
+Wir speichern eine echte WhatsApp-DOM-Kennung.
+Wenn keine eindeutige Kennung gefunden wird,
+löschen wir später NICHT blind irgendeine Nachricht.
+============================================================
+*/
+
+async function identifyBotMessage(
+  page
+) {
+
+  console.log(
+    '🔐 Ermittle eindeutige Kennung der Bot-Meldung...'
+  );
+
+
+  const identity =
+    await page.evaluate(
+      (
+        phrase,
+        liveUrl
+      ) => {
+
+        function normalize(
+          value
+        ) {
+
+          return String(
+            value ||
+            ''
+          )
+            .replace(
+              /\s+/g,
+              ' '
+            )
+            .trim();
+        }
+
+
+        const elements =
+          [
+            ...document.querySelectorAll(
+              '*'
+            )
+          ];
+
+
+        /*
+         * Möglichst kleinstes Element,
+         * das BEIDE Merkmale enthält.
+         */
+
+        const matches =
+          elements.filter(
+            element => {
+
+              const text =
+                normalize(
+                  element.textContent
+                );
+
+
+              return (
+                text.includes(
+                  phrase
+                ) &&
+                text.includes(
+                  liveUrl
+                )
+              );
+            }
+          );
+
+
+        if (!matches.length) {
+
+          return null;
+        }
+
+
+        matches.sort(
+          (
+            a,
+            b
+          ) => {
+
+            return (
+              a.children.length -
+              b.children.length
+            );
+          }
+        );
+
+
+        let element =
+          matches[0];
+
+
+        /*
+         * Bis zu 10 Eltern nach einer
+         * brauchbaren eindeutigen ID durchsuchen.
+         */
+
+        for (
+          let depth = 0;
+          depth < 10 &&
+          element;
+          depth++
+        ) {
+
+          const dataId =
+            element.getAttribute(
+              'data-id'
+            );
+
+
+          if (dataId) {
+
+            return {
+              keyType:
+                'data-id',
+
+              keyValue:
+                dataId,
+
+              prePlainText:
+                element.getAttribute(
+                  'data-pre-plain-text'
+                ) ||
+                null
+            };
+          }
+
+
+          const messageId =
+            element.getAttribute(
+              'data-message-id'
+            );
+
+
+          if (messageId) {
+
+            return {
+              keyType:
+                'data-message-id',
+
+              keyValue:
+                messageId,
+
+              prePlainText:
+                element.getAttribute(
+                  'data-pre-plain-text'
+                ) ||
+                null
+            };
+          }
+
+
+          const prePlain =
+            element.getAttribute(
+              'data-pre-plain-text'
+            );
+
+
+          if (prePlain) {
+
+            return {
+              keyType:
+                'data-pre-plain-text',
+
+              keyValue:
+                prePlain,
+
+              prePlainText:
+                prePlain
+            };
+          }
+
+
+          element =
+            element.parentElement;
+        }
+
+
+        /*
+         * KEINE eindeutige Kennung.
+         *
+         * Dann lieber später NICHT löschen.
+         */
+
+        return null;
+      },
+
+      LIVE_MESSAGE_PHRASE,
+
+      LIVE_URL
+    );
+
+
+  console.log(
+    '🔐 Bot-Nachrichtenkennung:',
+    identity
+  );
+
+
+  return identity;
 }
 
 
@@ -2037,7 +2236,7 @@ async function sendLiveMessage(
 
   assertPageAlive(
     page,
-    'Sendevorgang starten'
+    'Sendevorgang'
   );
 
 
@@ -2075,31 +2274,9 @@ async function sendLiveMessage(
   if (!composer) {
 
     throw new Error(
-      'Markiertes Meldungsfeld wurde nicht wiedergefunden.'
+      'Meldungsfeld wurde nicht wiedergefunden.'
     );
   }
-
-
-  await composer.evaluate(
-    element => {
-
-      element.scrollIntoView({
-        block: 'center',
-        inline: 'center'
-      });
-    }
-  );
-
-
-  await sleep(
-    500
-  );
-
-
-  assertPageAlive(
-    page,
-    'Composer anklicken'
-  );
 
 
   await composer.click({
@@ -2119,18 +2296,12 @@ async function sendLiveMessage(
 
 
   console.log(
-    '⌨️ Live-Meldung vollständig eingegeben.'
+    '⌨️ Live-Meldung eingegeben.'
   );
 
 
   await sleep(
     1500
-  );
-
-
-  assertPageAlive(
-    page,
-    'Meldung absenden'
   );
 
 
@@ -2140,35 +2311,956 @@ async function sendLiveMessage(
 
 
   console.log(
-    '📤 ENTER gedrückt.'
+    '📤 Live-Meldung abgesendet.'
   );
 
 
   await sleep(
-    5000
+    6000
   );
+
+
+  /*
+   * Jetzt die Bot-Meldung eindeutig identifizieren.
+   */
+
+  const identity =
+    await identifyBotMessage(
+      page
+    );
+
+
+  if (!identity) {
+
+    /*
+     * Meldung wurde trotzdem gesendet.
+     *
+     * Wir speichern aber bewusst KEINE
+     * unsichere Kennung.
+     */
+
+    console.log(
+      '⚠️ Live-Meldung wurde gesendet, aber keine sichere DOM-Kennung gefunden.'
+    );
+
+
+    console.log(
+      '⚠️ Aus Sicherheitsgründen würde diese Meldung später NICHT automatisch gelöscht.'
+    );
+  }
+
+
+  console.log(
+    '🎉 WhatsApp-Live-Meldung erfolgreich veröffentlicht.'
+  );
+
+
+  return identity;
+}
+
+
+/*
+============================================================
+NUR DIE BOT-MELDUNG SUCHEN
+============================================================
+*/
+
+async function markExactBotMessageForDeletion(
+  page,
+  savedState
+) {
+
+  /*
+   * Ohne gespeicherte eindeutige Kennung:
+   * KEINE Löschung.
+   */
+
+  if (
+    !savedState.botMessageKeyType ||
+    !savedState.botMessageKeyValue
+  ) {
+
+    return {
+      found: false,
+      reason:
+        'Keine eindeutige Bot-Nachrichtenkennung gespeichert.'
+    };
+  }
+
+
+  return await page.evaluate(
+    (
+      keyType,
+      keyValue,
+      phrase,
+      liveUrl
+    ) => {
+
+      function normalize(
+        value
+      ) {
+
+        return String(
+          value ||
+          ''
+        )
+          .replace(
+            /\s+/g,
+            ' '
+          )
+          .trim();
+      }
+
+
+      function isVisible(
+        element
+      ) {
+
+        if (!element) {
+
+          return false;
+        }
+
+
+        const rect =
+          element.getBoundingClientRect();
+
+
+        return (
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      }
+
+
+      document
+        .querySelectorAll(
+          '[data-bot-delete-target]'
+        )
+        .forEach(
+          element =>
+            element.removeAttribute(
+              'data-bot-delete-target'
+            )
+        );
+
+
+      let target =
+        null;
+
+
+      const all =
+        [
+          ...document.querySelectorAll(
+            '*'
+          )
+        ];
+
+
+      if (
+        keyType ===
+        'data-id'
+      ) {
+
+        target =
+          all.find(
+            element =>
+              element.getAttribute(
+                'data-id'
+              ) ===
+              keyValue
+          );
+      }
+
+
+      if (
+        !target &&
+        keyType ===
+          'data-message-id'
+      ) {
+
+        target =
+          all.find(
+            element =>
+              element.getAttribute(
+                'data-message-id'
+              ) ===
+              keyValue
+          );
+      }
+
+
+      if (
+        !target &&
+        keyType ===
+          'data-pre-plain-text'
+      ) {
+
+        target =
+          all.find(
+            element =>
+              element.getAttribute(
+                'data-pre-plain-text'
+              ) ===
+              keyValue
+          );
+      }
+
+
+      if (
+        !target
+      ) {
+
+        return {
+          found: false,
+          reason:
+            'Gespeicherte WhatsApp-Kennung wurde nicht mehr gefunden.'
+        };
+      }
+
+
+      /*
+       * ZWEITE SICHERHEIT:
+       * Das gefundene Element muss weiterhin
+       * genau unsere Live-Nachricht enthalten.
+       */
+
+      let container =
+        target;
+
+
+      let verified =
+        false;
+
+
+      for (
+        let depth = 0;
+        depth < 8 &&
+        container;
+        depth++
+      ) {
+
+        const text =
+          normalize(
+            container.textContent
+          );
+
+
+        if (
+          text.includes(
+            phrase
+          ) &&
+          text.includes(
+            liveUrl
+          )
+        ) {
+
+          verified =
+            true;
+
+          break;
+        }
+
+
+        container =
+          container.parentElement;
+      }
+
+
+      if (
+        !verified ||
+        !container
+      ) {
+
+        return {
+          found: false,
+          reason:
+            'Kennung gefunden, Text stimmt aber NICHT mit der Bot-Live-Meldung überein.'
+        };
+      }
+
+
+      if (
+        !isVisible(
+          container
+        )
+      ) {
+
+        return {
+          found: false,
+          reason:
+            'Bot-Meldung ist nicht sichtbar.'
+        };
+      }
+
+
+      container.setAttribute(
+        'data-bot-delete-target',
+        'true'
+      );
+
+
+      return {
+        found: true
+      };
+    },
+
+    savedState.botMessageKeyType,
+
+    savedState.botMessageKeyValue,
+
+    LIVE_MESSAGE_PHRASE,
+
+    LIVE_URL
+  );
+}
+
+
+/*
+============================================================
+BOT-MELDUNG LÖSCHEN
+============================================================
+*/
+
+async function deleteBotLiveMessage(
+  client,
+  savedState
+) {
+
+  const page =
+    client.pupPage;
 
 
   assertPageAlive(
     page,
-    'nach dem Absenden'
+    'Bot-Meldung löschen'
   );
 
 
-  const visible =
+  console.log(
+    '================================'
+  );
+
+
+  console.log(
+    '🗑️ LÖSCHE AUSSCHLIESSLICH BOT-LIVE-MELDUNG'
+  );
+
+
+  console.log(
+    '================================'
+  );
+
+
+  await openWhatsAppChannel(
+    page
+  );
+
+
+  const result =
+    await markExactBotMessageForDeletion(
+      page,
+      savedState
+    );
+
+
+  console.log(
+    '🔎 Bot-Meldung Suche:',
+    result
+  );
+
+
+  if (
+    !result.found
+  ) {
+
+    console.log(
+      '🛑 Keine Löschung durchgeführt.'
+    );
+
+
+    console.log(
+      '🛡️ Sicherheit: Andere Kanalbeiträge bleiben unangetastet.'
+    );
+
+
+    return false;
+  }
+
+
+  const target =
+    await page.$(
+      '[data-bot-delete-target="true"]'
+    );
+
+
+  if (!target) {
+
+    return false;
+  }
+
+
+  /*
+   * Maus über die exakt erkannte
+   * Bot-Meldung bewegen.
+   */
+
+  const box =
+    await target.boundingBox();
+
+
+  if (!box) {
+
+    return false;
+  }
+
+
+  await page.mouse.move(
+
+    box.x +
+      box.width / 2,
+
+    box.y +
+      Math.min(
+        30,
+        box.height / 2
+      )
+  );
+
+
+  await sleep(
+    1200
+  );
+
+
+  /*
+   * Menü-Button NUR im Bereich
+   * dieser Nachricht suchen.
+   */
+
+  const menuMarked =
     await page.evaluate(
-      message => {
+      () => {
 
-        const wanted =
-          String(
-            message
-          )
-            .replace(
-              /\s+/g,
-              ' '
+        function visible(
+          element
+        ) {
+
+          if (!element) {
+
+            return false;
+          }
+
+
+          const rect =
+            element.getBoundingClientRect();
+
+
+          return (
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        }
+
+
+        const target =
+          document.querySelector(
+            '[data-bot-delete-target="true"]'
+          );
+
+
+        if (!target) {
+
+          return false;
+        }
+
+
+        let container =
+          target;
+
+
+        for (
+          let depth = 0;
+          depth < 6 &&
+          container;
+          depth++
+        ) {
+
+          const buttons =
+            [
+              ...container.querySelectorAll(
+                [
+                  'button',
+                  '[role="button"]',
+                  '[aria-label]',
+                  '[data-testid]'
+                ].join(',')
+              )
+            ].filter(
+              visible
+            );
+
+
+          const button =
+            buttons.find(
+              element => {
+
+                const aria =
+                  (
+                    element.getAttribute(
+                      'aria-label'
+                    ) ||
+                    ''
+                  )
+                    .toLowerCase();
+
+
+                const title =
+                  (
+                    element.getAttribute(
+                      'title'
+                    ) ||
+                    ''
+                  )
+                    .toLowerCase();
+
+
+                const testId =
+                  (
+                    element.getAttribute(
+                      'data-testid'
+                    ) ||
+                    ''
+                  )
+                    .toLowerCase();
+
+
+                const html =
+                  (
+                    element.innerHTML ||
+                    ''
+                  )
+                    .toLowerCase();
+
+
+                return (
+                  aria.includes(
+                    'menü'
+                  ) ||
+                  aria.includes(
+                    'menu'
+                  ) ||
+                  aria.includes(
+                    'weitere'
+                  ) ||
+                  aria.includes(
+                    'more'
+                  ) ||
+                  title.includes(
+                    'menü'
+                  ) ||
+                  title.includes(
+                    'menu'
+                  ) ||
+                  testId.includes(
+                    'menu'
+                  ) ||
+                  html.includes(
+                    'down'
+                  ) ||
+                  html.includes(
+                    'chevron'
+                  )
+                );
+              }
+            );
+
+
+          if (button) {
+
+            button.setAttribute(
+              'data-bot-message-menu',
+              'true'
+            );
+
+
+            return true;
+          }
+
+
+          container =
+            container.parentElement;
+        }
+
+
+        return false;
+      }
+    );
+
+
+  if (!menuMarked) {
+
+    console.log(
+      '⚠️ Menü der Bot-Meldung wurde nicht sicher gefunden.'
+    );
+
+
+    console.log(
+      '🛑 Keine Löschung.'
+    );
+
+
+    return false;
+  }
+
+
+  const menuButton =
+    await page.$(
+      '[data-bot-message-menu="true"]'
+    );
+
+
+  if (!menuButton) {
+
+    return false;
+  }
+
+
+  await menuButton.click({
+    delay: 100
+  });
+
+
+  await sleep(
+    1500
+  );
+
+
+  /*
+   * Jetzt explizit "Löschen".
+   */
+
+  const deleteMarked =
+    await page.evaluate(
+      () => {
+
+        function visible(
+          element
+        ) {
+
+          if (!element) {
+
+            return false;
+          }
+
+
+          const rect =
+            element.getBoundingClientRect();
+
+
+          const style =
+            window.getComputedStyle(
+              element
+            );
+
+
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+          );
+        }
+
+
+        const elements =
+          [
+            ...document.querySelectorAll(
+              [
+                '[role="menuitem"]',
+                'button',
+                '[role="button"]',
+                '[tabindex]'
+              ].join(',')
             )
-            .trim();
+          ].filter(
+            visible
+          );
 
+
+        const deleteButton =
+          elements.find(
+            element => {
+
+              const text =
+                (
+                  element.textContent ||
+                  ''
+                )
+                  .replace(
+                    /\s+/g,
+                    ' '
+                  )
+                  .trim()
+                  .toLowerCase();
+
+
+              return (
+                text ===
+                  'löschen' ||
+                text ===
+                  'delete'
+              );
+            }
+          );
+
+
+        if (!deleteButton) {
+
+          return false;
+        }
+
+
+        deleteButton.setAttribute(
+          'data-bot-delete-button',
+          'true'
+        );
+
+
+        return true;
+      }
+    );
+
+
+  if (!deleteMarked) {
+
+    console.log(
+      '⚠️ Menüpunkt "Löschen" wurde nicht gefunden.'
+    );
+
+
+    return false;
+  }
+
+
+  const deleteButton =
+    await page.$(
+      '[data-bot-delete-button="true"]'
+    );
+
+
+  await deleteButton.click({
+    delay: 100
+  });
+
+
+  await sleep(
+    1500
+  );
+
+
+  /*
+   * Falls WhatsApp noch einen
+   * Bestätigungsdialog zeigt.
+   */
+
+  const confirmMarked =
+    await page.evaluate(
+      () => {
+
+        function visible(
+          element
+        ) {
+
+          if (!element) {
+
+            return false;
+          }
+
+
+          const rect =
+            element.getBoundingClientRect();
+
+
+          return (
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        }
+
+
+        const dialogs =
+          [
+            ...document.querySelectorAll(
+              '[role="dialog"]'
+            )
+          ].filter(
+            visible
+          );
+
+
+        if (!dialogs.length) {
+
+          /*
+           * Offenbar direkt gelöscht.
+           */
+
+          return {
+            needed: false
+          };
+        }
+
+
+        const dialog =
+          dialogs[
+            dialogs.length - 1
+          ];
+
+
+        const buttons =
+          [
+            ...dialog.querySelectorAll(
+              [
+                'button',
+                '[role="button"]'
+              ].join(',')
+            )
+          ].filter(
+            visible
+          );
+
+
+        /*
+         * Vorrang für "Für alle löschen".
+         */
+
+        let confirm =
+          buttons.find(
+            element => {
+
+              const text =
+                (
+                  element.textContent ||
+                  ''
+                )
+                  .replace(
+                    /\s+/g,
+                    ' '
+                  )
+                  .trim()
+                  .toLowerCase();
+
+
+              return (
+                text.includes(
+                  'für alle löschen'
+                ) ||
+                text.includes(
+                  'delete for everyone'
+                )
+              );
+            }
+          );
+
+
+        if (!confirm) {
+
+          confirm =
+            buttons.find(
+              element => {
+
+                const text =
+                  (
+                    element.textContent ||
+                    ''
+                  )
+                    .replace(
+                      /\s+/g,
+                      ' '
+                    )
+                    .trim()
+                    .toLowerCase();
+
+
+                return (
+                  text ===
+                    'löschen' ||
+                  text ===
+                    'delete'
+                );
+              }
+            );
+        }
+
+
+        if (!confirm) {
+
+          return {
+            needed: true,
+            found: false
+          };
+        }
+
+
+        confirm.setAttribute(
+          'data-bot-confirm-delete',
+          'true'
+        );
+
+
+        return {
+          needed: true,
+          found: true
+        };
+      }
+    );
+
+
+  if (
+    confirmMarked.needed
+  ) {
+
+    if (
+      !confirmMarked.found
+    ) {
+
+      console.log(
+        '⚠️ Lösch-Bestätigung wurde nicht sicher gefunden.'
+      );
+
+
+      return false;
+    }
+
+
+    const confirmButton =
+      await page.$(
+        '[data-bot-confirm-delete="true"]'
+      );
+
+
+    await confirmButton.click({
+      delay: 120
+    });
+
+
+    await sleep(
+      3000
+    );
+  }
+
+
+  /*
+   * Prüfen, ob die exakte Bot-Kennung
+   * verschwunden ist.
+   */
+
+  const stillExists =
+    await page.evaluate(
+      (
+        keyType,
+        keyValue
+      ) => {
 
         return [
           ...document.querySelectorAll(
@@ -2177,55 +3269,78 @@ async function sendLiveMessage(
         ].some(
           element => {
 
-            const text =
-              (
-                element.textContent ||
-                ''
-              )
-                .replace(
-                  /\s+/g,
-                  ' '
-                )
-                .trim();
-
-
             return (
-              text === wanted ||
-              text.includes(
-                'Jorne ist jetzt LIVE auf TikTok!'
+              (
+                keyType ===
+                  'data-id' &&
+                element.getAttribute(
+                  'data-id'
+                ) ===
+                  keyValue
+              ) ||
+
+              (
+                keyType ===
+                  'data-message-id' &&
+                element.getAttribute(
+                  'data-message-id'
+                ) ===
+                  keyValue
+              ) ||
+
+              (
+                keyType ===
+                  'data-pre-plain-text' &&
+                element.getAttribute(
+                  'data-pre-plain-text'
+                ) ===
+                  keyValue
               )
             );
           }
         );
       },
 
-      LIVE_MESSAGE
+      savedState.botMessageKeyType,
+
+      savedState.botMessageKeyValue
     );
 
 
+  if (stillExists) {
+
+    console.log(
+      '⚠️ Bot-Meldung ist nach dem Löschversuch noch vorhanden.'
+    );
+
+
+    return false;
+  }
+
+
   console.log(
-    visible
-      ?
-      '✅ Live-Meldung ist in der WhatsApp-Oberfläche sichtbar.'
-      :
-      '⚠️ Meldung wurde nicht eindeutig in der Oberfläche wiedergefunden.'
+    '✅ Bot-Live-Meldung wurde erfolgreich gelöscht.'
   );
 
 
   console.log(
-    '🎉 WhatsApp-Sendevorgang abgeschlossen.'
+    '🛡️ Keine andere Kanalnachricht wurde verändert.'
   );
+
+
+  return true;
 }
 
 
 /*
 ============================================================
-WHATSAPP STARTEN UND AUF READY WARTEN
+WHATSAPP STARTEN
 ============================================================
 */
 
-async function startWhatsAppAndSend(
-  store
+async function startWhatsApp(
+  store,
+  action
 ) {
 
   fs.mkdirSync(
@@ -2292,9 +3407,11 @@ async function startWhatsAppAndSend(
 
         defaultViewport: {
 
-          width: 1365,
+          width:
+            1365,
 
-          height: 900
+          height:
+            900
         }
       }
     });
@@ -2326,11 +3443,6 @@ async function startWhatsAppAndSend(
           'ready',
           () => {
 
-            /*
-             * READY kann mehrfach kommen.
-             * Das ist okay.
-             */
-
             console.log(
               '✅ WhatsApp READY-Event erhalten.'
             );
@@ -2361,32 +3473,6 @@ async function startWhatsAppAndSend(
 
 
         client.on(
-          'code',
-          code => {
-
-            console.log(
-              '================================'
-            );
-
-
-            console.log(
-              '📱 WHATSAPP KOPPLUNGSCODE:'
-            );
-
-
-            console.log(
-              code
-            );
-
-
-            console.log(
-              '================================'
-            );
-          }
-        );
-
-
-        client.on(
           'auth_failure',
           message => {
 
@@ -2410,12 +3496,6 @@ async function startWhatsAppAndSend(
                   `WhatsApp wurde vor READY getrennt: ${reason}`
                 )
               );
-            } else {
-
-              console.log(
-                '⚠️ WhatsApp getrennt:',
-                reason
-              );
             }
           }
         );
@@ -2434,11 +3514,6 @@ async function startWhatsAppAndSend(
     );
 
 
-  /*
-   * WICHTIG:
-   * initialize() nicht einfach verschwinden lassen.
-   */
-
   const initializePromise =
     client.initialize();
 
@@ -2453,53 +3528,27 @@ async function startWhatsAppAndSend(
   );
 
 
-  /*
-   * Nach READY nicht sofort loslegen.
-   * Erst auf eine wirklich stabile Seite warten.
-   */
-
   await waitForStableWhatsApp(
     client
   );
 
 
-  const page =
-    client.pupPage;
-
-
-  assertPageAlive(
-    page,
-    'nach WhatsApp-Stabilisierung'
-  );
-
-
-  console.log(
-    '✅ WhatsApp Web ist bereit für den Sendeversuch.'
-  );
+  let result;
 
 
   try {
 
-    await sendLiveMessage(
-      client
-    );
+    result =
+      await action(
+        client
+      );
 
   } finally {
-
-    /*
-     * Nur kurz warten.
-     * Der eigentliche Beitrag wurde bereits abgesendet.
-     */
 
     await sleep(
       2500
     );
 
-
-    /*
-     * initialize() kann intern noch etwas nacharbeiten.
-     * Wir verhindern hier einen unhandled rejection.
-     */
 
     initializePromise.catch(
       error => {
@@ -2512,24 +3561,16 @@ async function startWhatsAppAndSend(
 
 
         if (
-          message.includes(
+          !message.includes(
             'Target closed'
           )
         ) {
 
           console.log(
-            '⚠️ Puppeteer meldete beim Beenden "Target closed".'
+            '⚠️ initialize():',
+            message
           );
-
-
-          return;
         }
-
-
-        console.log(
-          '⚠️ WhatsApp initialize():',
-          message
-        );
       }
     );
 
@@ -2551,12 +3592,41 @@ async function startWhatsAppAndSend(
       );
     }
   }
+
+
+  return result;
 }
 
 
 /*
 ============================================================
-EINMALIGER GITHUB-CHECK
+STORE ERSTELLEN
+============================================================
+*/
+
+function createStore() {
+
+  fs.mkdirSync(
+    AUTH_DATA_PATH,
+    {
+      recursive: true
+    }
+  );
+
+
+  return new FixedMongoStore({
+
+    mongoose,
+
+    dataPath:
+      AUTH_DATA_PATH
+  });
+}
+
+
+/*
+============================================================
+MAIN
 ============================================================
 */
 
@@ -2601,8 +3671,14 @@ async function main() {
     await checkTikTokLive();
 
 
+  const savedState =
+    await getSavedState();
+
+
   const oldLive =
-    await getSavedLiveState();
+    Boolean(
+      savedState.live
+    );
 
 
   console.log(
@@ -2620,11 +3696,150 @@ async function main() {
     !currentLive
   ) {
 
+    /*
+     * Es gab vorher einen Live-Start und
+     * der Bot hatte tatsächlich eine Meldung gesendet.
+     */
+
+    if (
+      (
+        oldLive ||
+        savedState.deletePending
+      ) &&
+      savedState.whatsappSent
+    ) {
+
+      console.log(
+        '⚫ Jorne ist offline.'
+      );
+
+
+      console.log(
+        '🗑️ Die gespeicherte Bot-Live-Meldung soll entfernt werden.'
+      );
+
+
+      /*
+       * Wenn keine eindeutige Kennung gespeichert wurde,
+       * wird ABSICHTLICH nichts gelöscht.
+       */
+
+      if (
+        !savedState.botMessageKeyType ||
+        !savedState.botMessageKeyValue
+      ) {
+
+        console.log(
+          '🛑 Keine sichere Nachrichtenkennung vorhanden.'
+        );
+
+
+        console.log(
+          '🛡️ Deshalb wird keine WhatsApp-Nachricht gelöscht.'
+        );
+
+
+        await setOfflineState({
+          deletionSuccessful:
+            false
+        });
+
+
+        return;
+      }
+
+
+      const store =
+        createStore();
+
+
+      let deleted =
+        false;
+
+
+      try {
+
+        deleted =
+          await startWhatsApp(
+            store,
+
+            async client => {
+
+              return await deleteBotLiveMessage(
+                client,
+                savedState
+              );
+            }
+          );
+
+      } catch (error) {
+
+        console.error(
+          '⚠️ Bot-Live-Meldung konnte nicht gelöscht werden:',
+          error.message
+        );
+      }
+
+
+      if (deleted) {
+
+        await setOfflineState({
+          deletionSuccessful:
+            true
+        });
+
+
+        console.log(
+          '✅ Jorne offline.'
+        );
+
+
+        console.log(
+          '✅ Bot-Live-Meldung entfernt.'
+        );
+
+
+        console.log(
+          '✅ System für den nächsten Live-Start zurückgesetzt.'
+        );
+
+      } else {
+
+        /*
+         * TikTok ist trotzdem offline.
+         * Löschversuch wird vorgemerkt.
+         */
+
+        await markDeletePending();
+
+
+        console.log(
+          '⚠️ Bot-Meldung blieb bestehen.'
+        );
+
+
+        console.log(
+          '➡️ Ein späterer Offline-Lauf darf erneut versuchen, ausschließlich diese gespeicherte Bot-Meldung zu löschen.'
+        );
+      }
+
+
+      return;
+    }
+
+
+    /*
+     * Keine Bot-Meldung vorhanden.
+     */
+
     if (
       oldLive
     ) {
 
-      await setOfflineState();
+      await setOfflineState({
+        deletionSuccessful:
+          true
+      });
 
 
       console.log(
@@ -2633,25 +3848,22 @@ async function main() {
 
 
       console.log(
-        '✅ Status wurde zurückgesetzt.'
+        '✅ Status zurückgesetzt.'
       );
 
 
-      console.log(
-        '➡️ Beim nächsten Live-Start darf wieder genau eine WhatsApp-Meldung ausgelöst werden.'
-      );
-
-    } else {
-
-      console.log(
-        '⚫ Jorne ist weiterhin offline.'
-      );
-
-
-      console.log(
-        '✅ Keine WhatsApp-Nachricht erforderlich.'
-      );
+      return;
     }
+
+
+    console.log(
+      '⚫ Jorne ist weiterhin offline.'
+    );
+
+
+    console.log(
+      '✅ Keine WhatsApp-Aktion erforderlich.'
+    );
 
 
     return;
@@ -2680,7 +3892,7 @@ async function main() {
 
 
     console.log(
-      '✅ Kein weiterer WhatsApp-Sendeversuch.'
+      '✅ Keine zweite WhatsApp-Nachricht.'
     );
 
 
@@ -2710,70 +3922,37 @@ async function main() {
     );
 
 
-    console.log(
-      '✅ Keine doppelte Nachricht.'
-    );
-
-
     return;
   }
 
 
   console.log(
-    '🔒 Live-Start für diesen Workflow reserviert.'
-  );
-
-
-  fs.mkdirSync(
-    AUTH_DATA_PATH,
-    {
-      recursive: true
-    }
+    '🔒 Live-Start reserviert.'
   );
 
 
   const store =
-    new FixedMongoStore({
-
-      mongoose,
-
-      dataPath:
-        AUTH_DATA_PATH
-    });
+    createStore();
 
 
   try {
 
-    const exists =
-      await store.sessionExists({
+    const identity =
+      await startWhatsApp(
+        store,
 
-        session:
-          `RemoteAuth-${CLIENT_ID}`
-      });
+        async client => {
+
+          return await sendLiveMessage(
+            client
+          );
+        }
+      );
 
 
-    console.log(
-      '🗄️ Gespeicherte WhatsApp-Sitzung vorhanden:',
-      exists
+    await setWhatsAppSuccess(
+      identity
     );
-
-  } catch (error) {
-
-    console.log(
-      '⚠️ WhatsApp-Sitzungsstatus konnte nicht geprüft werden:',
-      error.message
-    );
-  }
-
-
-  try {
-
-    await startWhatsAppAndSend(
-      store
-    );
-
-
-    await setWhatsAppSuccess();
 
 
     console.log(
@@ -2782,8 +3961,32 @@ async function main() {
 
 
     console.log(
-      '🎉 LIVE-ALARM ERFOLGREICH ABGESCHLOSSEN'
+      '🎉 LIVE-ALARM ERFOLGREICH'
     );
+
+
+    if (identity) {
+
+      console.log(
+        '🔐 Bot-Live-Meldung wurde eindeutig gespeichert.'
+      );
+
+
+      console.log(
+        '➡️ Beim Offline-Wechsel darf genau diese Nachricht gelöscht werden.'
+      );
+
+    } else {
+
+      console.log(
+        '⚠️ Keine eindeutige Nachrichtenkennung.'
+      );
+
+
+      console.log(
+        '🛡️ Diese Meldung wird deshalb aus Sicherheitsgründen später NICHT automatisch gelöscht.'
+      );
+    }
 
 
     console.log(
@@ -2791,23 +3994,9 @@ async function main() {
     );
 
   } catch (error) {
-
-    /*
-     * GANZ WICHTIG:
-     *
-     * Wir setzen LIVE hier NICHT wieder auf OFFLINE.
-     *
-     * Sonst würde der Cronjob jede Minute WhatsApp erneut
-     * öffnen und du bekämst wieder ständig Benachrichtigungen.
-     */
 
     await setWhatsAppFailure(
       error
-    );
-
-
-    console.error(
-      '================================'
     );
 
 
@@ -2825,17 +4014,12 @@ async function main() {
 
 
     console.error(
-      '⚠️ Live-Status bleibt absichtlich auf LIVE.'
+      '⚠️ Live-Status bleibt auf LIVE.'
     );
 
 
     console.error(
-      '✅ Deshalb wird dieser Live-Start NICHT jede Minute erneut ausgelöst.'
-    );
-
-
-    console.error(
-      '================================'
+      '✅ Kein minutenweiser Sende-Loop.'
     );
 
 
@@ -2846,7 +4030,7 @@ async function main() {
 
 /*
 ============================================================
-START + SAUBERES ENDE
+START
 ============================================================
 */
 
