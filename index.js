@@ -32,16 +32,19 @@ const CLIENT_ID = 'jorne-whatsapp-live';
 const AUTH_DATA_PATH =
   path.resolve('./.wwebjs_auth');
 
-const TIKTOK_TIMEOUT_MS = 20000;
+const TIKTOK_TIMEOUT_MS =
+  20000;
 
-const WHATSAPP_READY_TIMEOUT_MS = 90000;
+const WHATSAPP_READY_TIMEOUT_MS =
+  90000;
 
-const WHATSAPP_STABLE_MS = 10000;
+const WHATSAPP_STABLE_MS =
+  10000;
 
 
 /*
 ============================================================
-MONGODB: TIKTOK-STATUS
+MONGODB: TIKTOK + WHATSAPP STATUS
 ============================================================
 */
 
@@ -75,21 +78,20 @@ const TikTokStateSchema =
       },
 
       /*
-       * Daten zur eindeutig vom Bot erzeugten
-       * WhatsApp-Kanalmeldung.
+       * Echte WhatsApp-ID der vom Bot
+       * erzeugten Live-Meldung.
        */
 
-      botMessageKeyType: {
+      botMessageId: {
         type: String,
         default: null
       },
 
-      botMessageKeyValue: {
-        type: String,
-        default: null
-      },
+      /*
+       * Echte WhatsApp-ID des Kanals.
+       */
 
-      botMessagePrePlainText: {
+      botChannelId: {
         type: String,
         default: null
       },
@@ -98,6 +100,12 @@ const TikTokStateSchema =
         type: Date,
         default: null
       },
+
+      /*
+       * Falls Löschen einmal fehlschlägt,
+       * darf ein späterer Offline-Run
+       * exakt dieselbe Nachricht erneut versuchen.
+       */
 
       deletePending: {
         type: Boolean,
@@ -120,7 +128,7 @@ const TikTokState =
 
 /*
 ============================================================
-GESPEICHERTEN STATUS HOLEN
+STATUS LADEN
 ============================================================
 */
 
@@ -129,155 +137,77 @@ async function getSavedState() {
   const state =
     await TikTokState
       .findOne({
-        username: TIKTOK_USERNAME
+        username:
+          TIKTOK_USERNAME
       })
       .lean();
 
 
   return state || {
-    username: TIKTOK_USERNAME,
-    live: false,
-    whatsappSent: false,
-    whatsappError: null,
-    botMessageKeyType: null,
-    botMessageKeyValue: null,
-    botMessagePrePlainText: null,
-    botMessageSentAt: null,
-    deletePending: false
+    username:
+      TIKTOK_USERNAME,
+
+    live:
+      false,
+
+    whatsappSent:
+      false,
+
+    whatsappError:
+      null,
+
+    botMessageId:
+      null,
+
+    botChannelId:
+      null,
+
+    botMessageSentAt:
+      null,
+
+    deletePending:
+      false
   };
 }
 
 
 /*
 ============================================================
-OFFLINE SPEICHERN
+OFFLINE + KOMPLETT ZURÜCKSETZEN
 ============================================================
 */
 
-async function setOfflineState(
-  {
-    deletionSuccessful = false
-  } = {}
-) {
-
-  const update = {
-
-    live: false,
-
-    whatsappError: null,
-
-    changedAt: new Date()
-  };
-
-
-  /*
-   * Nur wenn die Bot-Meldung tatsächlich
-   * entfernt wurde oder gar keine existiert,
-   * löschen wir ihre gespeicherten Daten.
-   */
-
-  if (
-    deletionSuccessful
-  ) {
-
-    update.whatsappSent = false;
-
-    update.botMessageKeyType = null;
-
-    update.botMessageKeyValue = null;
-
-    update.botMessagePrePlainText = null;
-
-    update.botMessageSentAt = null;
-
-    update.deletePending = false;
-  }
-
+async function resetOfflineState() {
 
   await TikTokState.updateOne(
     {
-      username: TIKTOK_USERNAME
-    },
-
-    {
-      $set: update
-    },
-
-    {
-      upsert: true
-    }
-  );
-}
-
-
-/*
-============================================================
-LÖSCHEN VORMERKEN
-============================================================
-*/
-
-async function markDeletePending() {
-
-  await TikTokState.updateOne(
-    {
-      username: TIKTOK_USERNAME
-    },
-
-    {
-      $set: {
-        live: false,
-        deletePending: true,
-        changedAt: new Date()
-      }
-    },
-
-    {
-      upsert: true
-    }
-  );
-}
-
-
-/*
-============================================================
-WHATSAPP-ERFOLG SPEICHERN
-============================================================
-*/
-
-async function setWhatsAppSuccess(
-  messageIdentity
-) {
-
-  await TikTokState.updateOne(
-    {
-      username: TIKTOK_USERNAME
+      username:
+        TIKTOK_USERNAME
     },
 
     {
       $set: {
 
-        live: true,
+        live:
+          false,
 
-        whatsappSent: true,
+        whatsappSent:
+          false,
 
-        whatsappError: null,
-
-        botMessageKeyType:
-          messageIdentity?.keyType ||
+        whatsappError:
           null,
 
-        botMessageKeyValue:
-          messageIdentity?.keyValue ||
+        botMessageId:
           null,
 
-        botMessagePrePlainText:
-          messageIdentity?.prePlainText ||
+        botChannelId:
           null,
 
         botMessageSentAt:
-          new Date(),
+          null,
 
-        deletePending: false,
+        deletePending:
+          false,
 
         changedAt:
           new Date()
@@ -285,7 +215,8 @@ async function setWhatsAppSuccess(
     },
 
     {
-      upsert: true
+      upsert:
+        true
     }
   );
 }
@@ -293,7 +224,148 @@ async function setWhatsAppSuccess(
 
 /*
 ============================================================
-WHATSAPP-FEHLER SPEICHERN
+OFFLINE + LÖSCHUNG NOCH OFFEN
+============================================================
+*/
+
+async function markDeletePending(
+  error = null
+) {
+
+  await TikTokState.updateOne(
+    {
+      username:
+        TIKTOK_USERNAME
+    },
+
+    {
+      $set: {
+
+        live:
+          false,
+
+        deletePending:
+          true,
+
+        whatsappError:
+          error
+            ? String(
+                error?.message ||
+                error
+              )
+            : null,
+
+        changedAt:
+          new Date()
+      }
+    },
+
+    {
+      upsert:
+        true
+    }
+  );
+}
+
+
+/*
+============================================================
+WHATSAPP-LIVE-MELDUNG ERFOLGREICH SPEICHERN
+============================================================
+*/
+
+async function setWhatsAppSuccess(
+  message,
+  channel
+) {
+
+  const messageId =
+    message?.id?._serialized ||
+    null;
+
+
+  const channelId =
+    channel?.id?._serialized ||
+    null;
+
+
+  if (!messageId) {
+
+    throw new Error(
+      'Nach dem Senden wurde keine WhatsApp-Message-ID zurückgegeben.'
+    );
+  }
+
+
+  if (!channelId) {
+
+    throw new Error(
+      'Nach dem Senden wurde keine WhatsApp-Kanal-ID zurückgegeben.'
+    );
+  }
+
+
+  await TikTokState.updateOne(
+    {
+      username:
+        TIKTOK_USERNAME
+    },
+
+    {
+      $set: {
+
+        live:
+          true,
+
+        whatsappSent:
+          true,
+
+        whatsappError:
+          null,
+
+        botMessageId:
+          messageId,
+
+        botChannelId:
+          channelId,
+
+        botMessageSentAt:
+          new Date(),
+
+        deletePending:
+          false,
+
+        changedAt:
+          new Date()
+      }
+    },
+
+    {
+      upsert:
+        true
+    }
+  );
+
+
+  console.log(
+    '🔐 Bot-Message-ID gespeichert:',
+    messageId
+  );
+
+
+  console.log(
+    '📺 Bot-Kanal-ID gespeichert:',
+    channelId
+  );
+}
+
+
+/*
+============================================================
+WHATSAPP-SENDEFEHLER
+
+LIVE BLEIBT TRUE.
+DADURCH KEIN NEUER SENDVERSUCH JEDE MINUTE.
 ============================================================
 */
 
@@ -303,22 +375,18 @@ async function setWhatsAppFailure(
 
   await TikTokState.updateOne(
     {
-      username: TIKTOK_USERNAME
+      username:
+        TIKTOK_USERNAME
     },
 
     {
       $set: {
 
-        /*
-         * Ganz wichtig:
-         * LIVE bleibt TRUE.
-         *
-         * Sonst würde jede Minute wieder versucht.
-         */
+        live:
+          true,
 
-        live: true,
-
-        whatsappSent: false,
+        whatsappSent:
+          false,
 
         whatsappError:
           String(
@@ -332,7 +400,8 @@ async function setWhatsAppFailure(
     },
 
     {
-      upsert: true
+      upsert:
+        true
     }
   );
 }
@@ -340,27 +409,44 @@ async function setWhatsAppFailure(
 
 /*
 ============================================================
-LIVE-START ATOMAR RESERVIEREN
+NEUEN LIVE-START ATOMAR RESERVIEREN
 ============================================================
 */
 
 async function claimNewLiveStart() {
 
-  const result =
+  const existingOffline =
     await TikTokState.findOneAndUpdate(
       {
-        username: TIKTOK_USERNAME,
-        live: false
+        username:
+          TIKTOK_USERNAME,
+
+        live:
+          false,
+
+        /*
+         * Wenn eine alte Meldung noch auf
+         * Löschung wartet, darf nicht gleichzeitig
+         * ein neuer Versand reserviert werden.
+         */
+
+        deletePending: {
+          $ne:
+            true
+        }
       },
 
       {
         $set: {
 
-          live: true,
+          live:
+            true,
 
-          whatsappSent: false,
+          whatsappSent:
+            false,
 
-          whatsappError: null,
+          whatsappError:
+            null,
 
           changedAt:
             new Date()
@@ -368,12 +454,13 @@ async function claimNewLiveStart() {
       },
 
       {
-        new: true
+        new:
+          true
       }
     );
 
 
-  if (result) {
+  if (existingOffline) {
 
     return true;
   }
@@ -382,7 +469,8 @@ async function claimNewLiveStart() {
   const existing =
     await TikTokState
       .findOne({
-        username: TIKTOK_USERNAME
+        username:
+          TIKTOK_USERNAME
       })
       .lean();
 
@@ -392,6 +480,10 @@ async function claimNewLiveStart() {
     return false;
   }
 
+
+  /*
+   * Erster Lauf überhaupt.
+   */
 
   try {
 
@@ -409,6 +501,9 @@ async function claimNewLiveStart() {
       whatsappError:
         null,
 
+      deletePending:
+        false,
+
       changedAt:
         new Date()
     });
@@ -419,7 +514,8 @@ async function claimNewLiveStart() {
   } catch (error) {
 
     if (
-      error?.code === 11000
+      error?.code ===
+      11000
     ) {
 
       return false;
@@ -437,7 +533,8 @@ REMOTEAUTH + MONGODB FIX
 ============================================================
 */
 
-class FixedMongoStore extends MongoStore {
+class FixedMongoStore
+  extends MongoStore {
 
   constructor({
     mongoose,
@@ -550,13 +647,15 @@ class FixedMongoStore extends MongoStore {
             `${session}.zip`
         })
         .sort({
-          uploadDate: -1
+          uploadDate:
+            -1
         })
         .toArray();
 
 
     if (
-      documents.length > 1
+      documents.length >
+      1
     ) {
 
       for (
@@ -666,7 +765,7 @@ function withTimeout(
 
 /*
 ============================================================
-TIKTOK PRÜFEN
+TIKTOK EINMAL PRÜFEN
 ============================================================
 */
 
@@ -739,14 +838,18 @@ async function checkTikTokLive() {
 
 /*
 ============================================================
-PUPPETEER PRÜFEN
+PUPPETEER/WHATSAPP PRÜFEN
 ============================================================
 */
 
 function assertPageAlive(
-  page,
+  client,
   step
 ) {
+
+  const page =
+    client?.pupPage;
+
 
   if (!page) {
 
@@ -757,7 +860,8 @@ function assertPageAlive(
 
 
   if (
-    typeof page.isClosed === 'function' &&
+    typeof page.isClosed ===
+      'function' &&
     page.isClosed()
   ) {
 
@@ -792,7 +896,8 @@ async function waitForStableWhatsApp(
 
 
   while (
-    Date.now() - started <
+    Date.now() -
+      started <
     WHATSAPP_READY_TIMEOUT_MS
   ) {
 
@@ -815,17 +920,22 @@ async function waitForStableWhatsApp(
     const pageAlive =
       page &&
       (
-        typeof page.isClosed !== 'function' ||
+        typeof page.isClosed !==
+          'function' ||
         !page.isClosed()
       );
 
 
     if (
-      state === 'CONNECTED' &&
+      state ===
+        'CONNECTED' &&
       pageAlive
     ) {
 
-      if (!stableSince) {
+      if (
+        stableSince ===
+        null
+      ) {
 
         stableSince =
           Date.now();
@@ -839,7 +949,7 @@ async function waitForStableWhatsApp(
 
       if (
         Date.now() -
-        stableSince >=
+          stableSince >=
         WHATSAPP_STABLE_MS
       ) {
 
@@ -872,1343 +982,120 @@ async function waitForStableWhatsApp(
 
 /*
 ============================================================
-WHATSAPP-POPUP SCHLIESSEN
+WHATSAPP-KANAL DIREKT HOLEN
 ============================================================
 */
 
-async function closeWhatsAppPopup(
-  page
+async function getJorneChannel(
+  client
 ) {
 
   assertPageAlive(
-    page,
-    'Popup-Prüfung'
+    client,
+    'Kanalsuche'
   );
 
 
-  const result =
-    await page.evaluate(
-      () => {
-
-        function isVisible(
-          element
-        ) {
-
-          if (!element) {
-
-            return false;
-          }
-
-
-          const rect =
-            element.getBoundingClientRect();
-
-
-          const style =
-            window.getComputedStyle(
-              element
-            );
-
-
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !== 'none' &&
-            style.visibility !== 'hidden'
-          );
-        }
-
-
-        function getText(
-          element
-        ) {
-
-          return (
-            element?.textContent ||
-            ''
-          )
-            .replace(
-              /\s+/g,
-              ' '
-            )
-            .trim();
-        }
-
-
-        let popup =
-          document.querySelector(
-            '[data-testid="confirm-popup"]'
-          );
-
-
-        if (
-          !popup ||
-          !isVisible(
-            popup
-          )
-        ) {
-
-          popup =
-            document.querySelector(
-              '[data-testid="popup-contents"]'
-            );
-        }
-
-
-        if (
-          !popup ||
-          !isVisible(
-            popup
-          )
-        ) {
-
-          popup =
-            [
-              ...document.querySelectorAll(
-                '[role="dialog"]'
-              )
-            ].find(
-              isVisible
-            );
-        }
-
-
-        if (!popup) {
-
-          return {
-            found: false,
-            closed: false
-          };
-        }
-
-
-        const candidates =
-          [
-            ...popup.querySelectorAll(
-              [
-                'button',
-                '[role="button"]',
-                '[tabindex]',
-                '[aria-label]'
-              ].join(',')
-            )
-          ].filter(
-            isVisible
-          );
-
-
-        let closeButton =
-          candidates.find(
-            element => {
-
-              const aria =
-                (
-                  element.getAttribute(
-                    'aria-label'
-                  ) ||
-                  ''
-                )
-                  .trim()
-                  .toLowerCase();
-
-
-              const text =
-                getText(
-                  element
-                )
-                  .toLowerCase();
-
-
-              const html =
-                (
-                  element.innerHTML ||
-                  ''
-                )
-                  .toLowerCase();
-
-
-              return (
-                aria.includes(
-                  'schließen'
-                ) ||
-                aria ===
-                  'close' ||
-                text ===
-                  'schließen' ||
-                text ===
-                  'close' ||
-                html.includes(
-                  'ic-close'
-                )
-              );
-            }
-          );
-
-
-        if (!closeButton) {
-
-          closeButton =
-            candidates.find(
-              element => {
-
-                const text =
-                  getText(
-                    element
-                  )
-                    .toLowerCase();
-
-
-                return (
-                  text === 'ok' ||
-                  text === 'okay' ||
-                  text === 'verstanden' ||
-                  text === 'fertig' ||
-                  text === 'weiter' ||
-                  text === 'nicht jetzt'
-                );
-              }
-            );
-        }
-
-
-        if (!closeButton) {
-
-          return {
-            found: true,
-            closed: false
-          };
-        }
-
-
-        closeButton.click();
-
-
-        return {
-          found: true,
-          closed: true
-        };
-      }
-    );
-
-
-  if (
-    result.found &&
-    result.closed
-  ) {
-
-    await sleep(
-      2000
-    );
-
-
-    return;
-  }
-
-
-  if (
-    result.found &&
-    !result.closed
-  ) {
-
-    try {
-
-      await page.keyboard.press(
-        'Escape'
-      );
-
-
-      await sleep(
-        1500
-      );
-
-    } catch {}
-  }
-}
-
-
-/*
-============================================================
-KANALANSICHT PRÜFEN
-============================================================
-*/
-
-async function inspectRightChannelArea(
-  page
-) {
-
-  assertPageAlive(
-    page,
-    'Kanalansicht prüfen'
+  console.log(
+    `🔎 Suche WhatsApp-Kanal "${CHANNEL_NAME}"...`
   );
 
 
-  return await page.evaluate(
-    channelName => {
-
-      const channel =
-        channelName.toLowerCase();
+  const channels =
+    await client.getChannels();
 
 
-      const pageText =
-        (
-          document.body?.innerText ||
-          ''
-        )
-          .replace(
-            /\s+/g,
-            ' '
-          )
-          .trim();
+  console.log(
+    `📺 Gefundene WhatsApp-Kanäle: ${channels.length}`
+  );
 
 
-      const emptyState =
-        pageText.includes(
-          'Kanäle entdecken'
-        ) ||
-        pageText.includes(
-          'Folge den Kanälen, die dich interessieren'
-        );
-
-
-      const rightText =
-        [
-          ...document.querySelectorAll(
-            '*'
-          )
-        ]
-          .filter(
-            element => {
-
-              const rect =
-                element.getBoundingClientRect();
-
-
-              return (
-                rect.width > 0 &&
-                rect.height > 0 &&
-                rect.left >
-                  window.innerWidth *
-                    0.32
-              );
-            }
-          )
-          .some(
-            element => {
-
-              const text =
-                (
-                  element.textContent ||
-                  ''
-                )
-                  .toLowerCase();
-
-
-              const aria =
-                (
-                  element.getAttribute(
-                    'aria-label'
-                  ) ||
-                  ''
-                )
-                  .toLowerCase();
-
-
-              return (
-                text.includes(
-                  channel
-                ) ||
-                aria.includes(
-                  channel
-                )
-              );
-            }
-          );
-
-
-      return {
-
-        emptyState,
-
-        channelNameVisibleRight:
-          rightText
-      };
-    },
-
+  const wanted =
     CHANNEL_NAME
-  );
-}
+      .trim()
+      .toLowerCase();
 
 
-/*
-============================================================
-WHATSAPP-KANAL ÖFFNEN
-============================================================
-*/
+  const channel =
+    channels.find(
+      item => {
 
-async function openWhatsAppChannel(
-  page
-) {
-
-  assertPageAlive(
-    page,
-    'Kanäle öffnen'
-  );
-
-
-  console.log(
-    '🔎 Suche Bereich "Kanäle"...'
-  );
-
-
-  const channelsFound =
-    await page.evaluate(
-      () => {
-
-        function normalize(
-          value
-        ) {
-
-          return String(
-            value ||
+        const name =
+          String(
+            item?.name ||
             ''
           )
-            .replace(
-              /\s+/g,
-              ' '
-            )
             .trim()
             .toLowerCase();
-        }
 
 
-        function isVisible(
-          element
-        ) {
-
-          if (!element) {
-
-            return false;
-          }
-
-
-          const rect =
-            element.getBoundingClientRect();
-
-
-          return (
-            rect.width > 0 &&
-            rect.height > 0
-          );
-        }
-
-
-        document
-          .querySelectorAll(
-            '[data-bot-channels-button]'
-          )
-          .forEach(
-            element =>
-              element.removeAttribute(
-                'data-bot-channels-button'
-              )
-          );
-
-
-        const elements =
-          [
-            ...document.querySelectorAll(
-              [
-                'button',
-                '[role="button"]',
-                '[role="tab"]',
-                '[tabindex]',
-                '[aria-label]',
-                '[data-testid]'
-              ].join(',')
-            )
-          ].filter(
-            isVisible
-          );
-
-
-        let target =
-          document.querySelector(
-            '[data-testid="newsletter-tab-drawer"]'
-          );
-
-
-        if (
-          target &&
-          !isVisible(
-            target
-          )
-        ) {
-
-          target =
-            null;
-        }
-
-
-        if (!target) {
-
-          target =
-            elements.find(
-              element =>
-                normalize(
-                  element.getAttribute(
-                    'aria-label'
-                  )
-                ) ===
-                'kanäle'
-            );
-        }
-
-
-        if (!target) {
-
-          target =
-            elements.find(
-              element => {
-
-                const testId =
-                  normalize(
-                    element.getAttribute(
-                      'data-testid'
-                    )
-                  );
-
-
-                return (
-                  testId.includes(
-                    'newsletter-tab-drawer'
-                  )
-                );
-              }
-            );
-        }
-
-
-        if (!target) {
-
-          target =
-            elements.find(
-              element =>
-                normalize(
-                  element.textContent
-                ) ===
-                'kanäle'
-            );
-        }
-
-
-        if (!target) {
-
-          return false;
-        }
-
-
-        const clickable =
-          target.closest(
-            [
-              'button',
-              '[role="button"]',
-              '[role="tab"]',
-              '[tabindex]'
-            ].join(',')
-          ) ||
-          target;
-
-
-        clickable.setAttribute(
-          'data-bot-channels-button',
-          'true'
+        return (
+          name ===
+          wanted
         );
-
-
-        return true;
       }
     );
 
 
-  if (!channelsFound) {
+  if (!channel) {
 
-    throw new Error(
-      'Bereich "Kanäle" wurde nicht gefunden.'
-    );
-  }
+    /*
+     * Diagnose ohne sensible Daten.
+     */
 
-
-  const channelsButton =
-    await page.$(
-      '[data-bot-channels-button="true"]'
-    );
-
-
-  if (!channelsButton) {
-
-    throw new Error(
-      'Markierter Kanäle-Button wurde nicht gefunden.'
-    );
-  }
-
-
-  await channelsButton.click({
-    delay: 120
-  });
-
-
-  console.log(
-    '✅ Bereich "Kanäle" geöffnet.'
-  );
-
-
-  await sleep(
-    4500
-  );
-
-
-  await closeWhatsAppPopup(
-    page
-  );
-
-
-  await sleep(
-    2500
-  );
-
-
-  console.log(
-    `🔎 Suche Kanal "${CHANNEL_NAME}"...`
-  );
-
-
-  const channelFound =
-    await page.evaluate(
-      channelName => {
-
-        function normalize(
-          value
-        ) {
-
-          return String(
-            value ||
-            ''
-          )
-            .replace(
-              /\s+/g,
-              ' '
-            )
-            .trim()
-            .toLowerCase();
-        }
-
-
-        function isVisible(
-          element
-        ) {
-
-          if (!element) {
-
-            return false;
-          }
-
-
-          const rect =
-            element.getBoundingClientRect();
-
-
-          return (
-            rect.width > 0 &&
-            rect.height > 0
-          );
-        }
-
-
-        document
-          .querySelectorAll(
-            '[data-bot-channel-target]'
-          )
-          .forEach(
-            element =>
-              element.removeAttribute(
-                'data-bot-channel-target'
-              )
-          );
-
-
-        const wanted =
-          normalize(
-            channelName
-          );
-
-
-        const cells =
-          [
-            ...document.querySelectorAll(
-              '[data-testid="newsletter-tab-newsletter-cell"]'
-            )
-          ].filter(
-            isVisible
-          );
-
-
-        const target =
-          cells.find(
-            element => {
-
-              const text =
-                normalize(
-                  element.textContent
-                );
-
-
-              const aria =
-                normalize(
-                  element.getAttribute(
-                    'aria-label'
-                  )
-                );
-
-
-              return (
-                text.includes(
-                  wanted
-                ) ||
-                aria.includes(
-                  wanted
-                )
-              );
-            }
-          );
-
-
-        if (!target) {
-
-          return false;
-        }
-
-
-        const rect =
-          target.getBoundingClientRect();
-
-
-        if (
-          rect.width > 700 ||
-          rect.height > 300 ||
-          rect.left >
-            window.innerWidth *
-              0.55
-        ) {
-
-          return false;
-        }
-
-
-        target.setAttribute(
-          'data-bot-channel-target',
-          'true'
+    const names =
+      channels
+        .map(
+          item =>
+            item?.name
+        )
+        .filter(
+          Boolean
         );
 
-
-        return true;
-      },
-
-      CHANNEL_NAME
-    );
-
-
-  if (!channelFound) {
-
-    throw new Error(
-      `Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`
-    );
-  }
-
-
-  const channelHandle =
-    await page.$(
-      '[data-bot-channel-target="true"]'
-    );
-
-
-  if (!channelHandle) {
-
-    throw new Error(
-      'Markierte Kanal-Zelle wurde nicht wiedergefunden.'
-    );
-  }
-
-
-  const box =
-    await channelHandle.boundingBox();
-
-
-  if (!box) {
-
-    throw new Error(
-      'Keine Klickposition für Jorne_L1ve verfügbar.'
-    );
-  }
-
-
-  await page.mouse.click(
-
-    box.x +
-      box.width / 2,
-
-    box.y +
-      box.height / 2,
-
-    {
-      delay: 150
-    }
-  );
-
-
-  console.log(
-    `✅ "${CHANNEL_NAME}" angeklickt.`
-  );
-
-
-  await sleep(
-    5000
-  );
-
-
-  await closeWhatsAppPopup(
-    page
-  );
-
-
-  await sleep(
-    1500
-  );
-
-
-  let check =
-    await inspectRightChannelArea(
-      page
-    );
-
-
-  if (
-    check.emptyState &&
-    !check.channelNameVisibleRight
-  ) {
 
     console.log(
-      '🔁 Kanalansicht noch nicht offen – zweiter Klick.'
+      '🔎 Verfügbare Kanalnamen:',
+      names
     );
 
-
-    const secondHandle =
-      await page.$(
-        '[data-bot-channel-target="true"]'
-      );
-
-
-    if (secondHandle) {
-
-      const secondBox =
-        await secondHandle.boundingBox();
-
-
-      if (secondBox) {
-
-        await page.mouse.click(
-
-          secondBox.x +
-            secondBox.width / 2,
-
-          secondBox.y +
-            secondBox.height / 2,
-
-          {
-            delay: 180
-          }
-        );
-
-
-        await sleep(
-          5000
-        );
-      }
-    }
-
-
-    check =
-      await inspectRightChannelArea(
-        page
-      );
-  }
-
-
-  console.log(
-    '📺 Kanalansicht:',
-    check
-  );
-
-
-  if (
-    check.emptyState &&
-    !check.channelNameVisibleRight
-  ) {
 
     throw new Error(
-      `Kanal "${CHANNEL_NAME}" wurde rechts nicht geöffnet.`
+      `WhatsApp-Kanal "${CHANNEL_NAME}" wurde über getChannels() nicht gefunden.`
     );
   }
 
 
-  console.log(
-    `✅ Kanal "${CHANNEL_NAME}" ist tatsächlich geöffnet.`
-  );
+  const channelId =
+    channel?.id?._serialized;
 
 
-  await sleep(
-    2500
-  );
-}
-
-
-/*
-============================================================
-COMPOSER FINDEN
-============================================================
-*/
-
-async function markComposer(
-  page
-) {
-
-  const found =
-    await page.evaluate(
-      () => {
-
-        function isVisible(
-          element
-        ) {
-
-          if (!element) {
-
-            return false;
-          }
-
-
-          const rect =
-            element.getBoundingClientRect();
-
-
-          const style =
-            window.getComputedStyle(
-              element
-            );
-
-
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !== 'none' &&
-            style.visibility !== 'hidden'
-          );
-        }
-
-
-        document
-          .querySelectorAll(
-            '[data-bot-composer]'
-          )
-          .forEach(
-            element =>
-              element.removeAttribute(
-                'data-bot-composer'
-              )
-          );
-
-
-        let target =
-          document.querySelector(
-            '[data-testid="conversation-compose-box-input"]'
-          );
-
-
-        if (
-          target &&
-          !isVisible(
-            target
-          )
-        ) {
-
-          target =
-            null;
-        }
-
-
-        if (!target) {
-
-          const candidates =
-            [
-              ...document.querySelectorAll(
-                [
-                  '[contenteditable="true"]',
-                  '[role="textbox"]',
-                  '[data-lexical-editor="true"]',
-                  'textarea'
-                ].join(',')
-              )
-            ].filter(
-              isVisible
-            );
-
-
-          target =
-            candidates.find(
-              element => {
-
-                const rect =
-                  element.getBoundingClientRect();
-
-
-                const aria =
-                  (
-                    element.getAttribute(
-                      'aria-label'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                const placeholder =
-                  (
-                    element.getAttribute(
-                      'placeholder'
-                    ) ||
-                    element.getAttribute(
-                      'data-placeholder'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                return (
-                  !aria.includes(
-                    'suchen'
-                  ) &&
-                  !placeholder.includes(
-                    'suchen'
-                  ) &&
-                  rect.left > 500 &&
-                  rect.width > 100
-                );
-              }
-            );
-        }
-
-
-        if (!target) {
-
-          return false;
-        }
-
-
-        target.setAttribute(
-          'data-bot-composer',
-          'true'
-        );
-
-
-        return true;
-      }
-    );
-
-
-  if (!found) {
+  if (!channelId) {
 
     throw new Error(
-      'Meldungsfeld wurde nicht gefunden.'
+      `Kanal "${CHANNEL_NAME}" hat keine gültige WhatsApp-ID.`
     );
   }
-}
-
-
-/*
-============================================================
-MEHRZEILIGE MELDUNG
-============================================================
-*/
-
-async function typeMultilineMessage(
-  page,
-  message
-) {
-
-  const lines =
-    message.split(
-      '\n'
-    );
-
-
-  for (
-    let index = 0;
-    index < lines.length;
-    index++
-  ) {
-
-    const line =
-      lines[index];
-
-
-    if (line) {
-
-      await page.keyboard.type(
-        line,
-        {
-          delay: 25
-        }
-      );
-    }
-
-
-    if (
-      index <
-      lines.length - 1
-    ) {
-
-      await page.keyboard.down(
-        'Shift'
-      );
-
-
-      await page.keyboard.press(
-        'Enter'
-      );
-
-
-      await page.keyboard.up(
-        'Shift'
-      );
-    }
-  }
-}
-
-
-/*
-============================================================
-BOT-MELDUNG IDENTIFIZIEREN
-
-Wir speichern eine echte WhatsApp-DOM-Kennung.
-Wenn keine eindeutige Kennung gefunden wird,
-löschen wir später NICHT blind irgendeine Nachricht.
-============================================================
-*/
-
-async function identifyBotMessage(
-  page
-) {
-
-  console.log(
-    '🔐 Ermittle eindeutige Kennung der Bot-Meldung...'
-  );
-
-
-  const identity =
-    await page.evaluate(
-      (
-        phrase,
-        liveUrl
-      ) => {
-
-        function normalize(
-          value
-        ) {
-
-          return String(
-            value ||
-            ''
-          )
-            .replace(
-              /\s+/g,
-              ' '
-            )
-            .trim();
-        }
-
-
-        const elements =
-          [
-            ...document.querySelectorAll(
-              '*'
-            )
-          ];
-
-
-        /*
-         * Möglichst kleinstes Element,
-         * das BEIDE Merkmale enthält.
-         */
-
-        const matches =
-          elements.filter(
-            element => {
-
-              const text =
-                normalize(
-                  element.textContent
-                );
-
-
-              return (
-                text.includes(
-                  phrase
-                ) &&
-                text.includes(
-                  liveUrl
-                )
-              );
-            }
-          );
-
-
-        if (!matches.length) {
-
-          return null;
-        }
-
-
-        matches.sort(
-          (
-            a,
-            b
-          ) => {
-
-            return (
-              a.children.length -
-              b.children.length
-            );
-          }
-        );
-
-
-        let element =
-          matches[0];
-
-
-        /*
-         * Bis zu 10 Eltern nach einer
-         * brauchbaren eindeutigen ID durchsuchen.
-         */
-
-        for (
-          let depth = 0;
-          depth < 10 &&
-          element;
-          depth++
-        ) {
-
-          const dataId =
-            element.getAttribute(
-              'data-id'
-            );
-
-
-          if (dataId) {
-
-            return {
-              keyType:
-                'data-id',
-
-              keyValue:
-                dataId,
-
-              prePlainText:
-                element.getAttribute(
-                  'data-pre-plain-text'
-                ) ||
-                null
-            };
-          }
-
-
-          const messageId =
-            element.getAttribute(
-              'data-message-id'
-            );
-
-
-          if (messageId) {
-
-            return {
-              keyType:
-                'data-message-id',
-
-              keyValue:
-                messageId,
-
-              prePlainText:
-                element.getAttribute(
-                  'data-pre-plain-text'
-                ) ||
-                null
-            };
-          }
-
-
-          const prePlain =
-            element.getAttribute(
-              'data-pre-plain-text'
-            );
-
-
-          if (prePlain) {
-
-            return {
-              keyType:
-                'data-pre-plain-text',
-
-              keyValue:
-                prePlain,
-
-              prePlainText:
-                prePlain
-            };
-          }
-
-
-          element =
-            element.parentElement;
-        }
-
-
-        /*
-         * KEINE eindeutige Kennung.
-         *
-         * Dann lieber später NICHT löschen.
-         */
-
-        return null;
-      },
-
-      LIVE_MESSAGE_PHRASE,
-
-      LIVE_URL
-    );
 
 
   console.log(
-    '🔐 Bot-Nachrichtenkennung:',
-    identity
+    `✅ Kanal gefunden: "${channel.name}"`
   );
 
 
-  return identity;
+  console.log(
+    '📺 Kanal-ID:',
+    channelId
+  );
+
+
+  return channel;
 }
 
 
 /*
 ============================================================
-LIVE-MELDUNG SENDEN
+LIVE-MELDUNG DIREKT SENDEN
 ============================================================
 */
 
@@ -2221,7 +1108,8 @@ async function sendLiveMessage(
 
 
   if (
-    state !== 'CONNECTED'
+    state !==
+    'CONNECTED'
   ) {
 
     throw new Error(
@@ -2230,13 +1118,9 @@ async function sendLiveMessage(
   }
 
 
-  const page =
-    client.pupPage;
-
-
   assertPageAlive(
-    page,
-    'Sendevorgang'
+    client,
+    'Live-Meldung senden'
   );
 
 
@@ -2255,370 +1139,91 @@ async function sendLiveMessage(
   );
 
 
-  await openWhatsAppChannel(
-    page
-  );
-
-
-  await markComposer(
-    page
-  );
-
-
-  const composer =
-    await page.$(
-      '[data-bot-composer="true"]'
+  const channel =
+    await getJorneChannel(
+      client
     );
 
 
-  if (!composer) {
+  /*
+   * whatsapp-web.js 1.34.7:
+   * Channel.sendMessage() liefert
+   * das echte Message-Objekt zurück.
+   */
+
+  const message =
+    await channel.sendMessage(
+      LIVE_MESSAGE
+    );
+
+
+  if (!message) {
 
     throw new Error(
-      'Meldungsfeld wurde nicht wiedergefunden.'
+      'WhatsApp hat nach dem Senden kein Message-Objekt zurückgegeben.'
     );
   }
 
 
-  await composer.click({
-    delay: 100
-  });
+  const messageId =
+    message?.id?._serialized;
 
 
-  await sleep(
-    500
-  );
+  if (!messageId) {
 
-
-  await typeMultilineMessage(
-    page,
-    LIVE_MESSAGE
-  );
-
-
-  console.log(
-    '⌨️ Live-Meldung eingegeben.'
-  );
-
-
-  await sleep(
-    1500
-  );
-
-
-  await page.keyboard.press(
-    'Enter'
-  );
-
-
-  console.log(
-    '📤 Live-Meldung abgesendet.'
-  );
-
-
-  await sleep(
-    6000
-  );
-
-
-  /*
-   * Jetzt die Bot-Meldung eindeutig identifizieren.
-   */
-
-  const identity =
-    await identifyBotMessage(
-      page
-    );
-
-
-  if (!identity) {
-
-    /*
-     * Meldung wurde trotzdem gesendet.
-     *
-     * Wir speichern aber bewusst KEINE
-     * unsichere Kennung.
-     */
-
-    console.log(
-      '⚠️ Live-Meldung wurde gesendet, aber keine sichere DOM-Kennung gefunden.'
-    );
-
-
-    console.log(
-      '⚠️ Aus Sicherheitsgründen würde diese Meldung später NICHT automatisch gelöscht.'
+    throw new Error(
+      'Die gesendete WhatsApp-Nachricht besitzt keine Message-ID.'
     );
   }
 
 
   console.log(
-    '🎉 WhatsApp-Live-Meldung erfolgreich veröffentlicht.'
+    '✅ Live-Meldung erfolgreich veröffentlicht.'
   );
 
 
-  return identity;
-}
+  console.log(
+    '🔐 Echte WhatsApp-Message-ID:',
+    messageId
+  );
 
-
-/*
-============================================================
-NUR DIE BOT-MELDUNG SUCHEN
-============================================================
-*/
-
-async function markExactBotMessageForDeletion(
-  page,
-  savedState
-) {
 
   /*
-   * Ohne gespeicherte eindeutige Kennung:
-   * KEINE Löschung.
+   * Zusätzliche Kontrolle:
+   * Der zurückgegebene Inhalt sollte
+   * unsere Live-Meldung enthalten.
    */
+
+  const body =
+    String(
+      message.body ||
+      ''
+    );
+
 
   if (
-    !savedState.botMessageKeyType ||
-    !savedState.botMessageKeyValue
+    body &&
+    !body.includes(
+      LIVE_MESSAGE_PHRASE
+    )
   ) {
 
-    return {
-      found: false,
-      reason:
-        'Keine eindeutige Bot-Nachrichtenkennung gespeichert.'
-    };
+    throw new Error(
+      'Gesendetes Message-Objekt enthält nicht den erwarteten Live-Text.'
+    );
   }
 
 
-  return await page.evaluate(
-    (
-      keyType,
-      keyValue,
-      phrase,
-      liveUrl
-    ) => {
-
-      function normalize(
-        value
-      ) {
-
-        return String(
-          value ||
-          ''
-        )
-          .replace(
-            /\s+/g,
-            ' '
-          )
-          .trim();
-      }
-
-
-      function isVisible(
-        element
-      ) {
-
-        if (!element) {
-
-          return false;
-        }
-
-
-        const rect =
-          element.getBoundingClientRect();
-
-
-        return (
-          rect.width > 0 &&
-          rect.height > 0
-        );
-      }
-
-
-      document
-        .querySelectorAll(
-          '[data-bot-delete-target]'
-        )
-        .forEach(
-          element =>
-            element.removeAttribute(
-              'data-bot-delete-target'
-            )
-        );
-
-
-      let target =
-        null;
-
-
-      const all =
-        [
-          ...document.querySelectorAll(
-            '*'
-          )
-        ];
-
-
-      if (
-        keyType ===
-        'data-id'
-      ) {
-
-        target =
-          all.find(
-            element =>
-              element.getAttribute(
-                'data-id'
-              ) ===
-              keyValue
-          );
-      }
-
-
-      if (
-        !target &&
-        keyType ===
-          'data-message-id'
-      ) {
-
-        target =
-          all.find(
-            element =>
-              element.getAttribute(
-                'data-message-id'
-              ) ===
-              keyValue
-          );
-      }
-
-
-      if (
-        !target &&
-        keyType ===
-          'data-pre-plain-text'
-      ) {
-
-        target =
-          all.find(
-            element =>
-              element.getAttribute(
-                'data-pre-plain-text'
-              ) ===
-              keyValue
-          );
-      }
-
-
-      if (
-        !target
-      ) {
-
-        return {
-          found: false,
-          reason:
-            'Gespeicherte WhatsApp-Kennung wurde nicht mehr gefunden.'
-        };
-      }
-
-
-      /*
-       * ZWEITE SICHERHEIT:
-       * Das gefundene Element muss weiterhin
-       * genau unsere Live-Nachricht enthalten.
-       */
-
-      let container =
-        target;
-
-
-      let verified =
-        false;
-
-
-      for (
-        let depth = 0;
-        depth < 8 &&
-        container;
-        depth++
-      ) {
-
-        const text =
-          normalize(
-            container.textContent
-          );
-
-
-        if (
-          text.includes(
-            phrase
-          ) &&
-          text.includes(
-            liveUrl
-          )
-        ) {
-
-          verified =
-            true;
-
-          break;
-        }
-
-
-        container =
-          container.parentElement;
-      }
-
-
-      if (
-        !verified ||
-        !container
-      ) {
-
-        return {
-          found: false,
-          reason:
-            'Kennung gefunden, Text stimmt aber NICHT mit der Bot-Live-Meldung überein.'
-        };
-      }
-
-
-      if (
-        !isVisible(
-          container
-        )
-      ) {
-
-        return {
-          found: false,
-          reason:
-            'Bot-Meldung ist nicht sichtbar.'
-        };
-      }
-
-
-      container.setAttribute(
-        'data-bot-delete-target',
-        'true'
-      );
-
-
-      return {
-        found: true
-      };
-    },
-
-    savedState.botMessageKeyType,
-
-    savedState.botMessageKeyValue,
-
-    LIVE_MESSAGE_PHRASE,
-
-    LIVE_URL
-  );
+  return {
+    message,
+    channel
+  };
 }
 
 
 /*
 ============================================================
-BOT-MELDUNG LÖSCHEN
+EXAKTE BOT-LIVE-MELDUNG FÜR ALLE LÖSCHEN
 ============================================================
 */
 
@@ -2627,605 +1232,122 @@ async function deleteBotLiveMessage(
   savedState
 ) {
 
-  const page =
-    client.pupPage;
+  console.log(
+    '================================'
+  );
+
+
+  console.log(
+    '🗑️ LÖSCHE EXAKT DIE BOT-LIVE-MELDUNG'
+  );
+
+
+  console.log(
+    '================================'
+  );
+
+
+  /*
+   * Ohne gespeicherte echte ID
+   * wird GAR NICHT gelöscht.
+   */
+
+  if (
+    !savedState.botMessageId
+  ) {
+
+    console.log(
+      '🛑 Keine gespeicherte Bot-Message-ID.'
+    );
+
+
+    console.log(
+      '🛡️ Keine WhatsApp-Nachricht wird gelöscht.'
+    );
+
+
+    return false;
+  }
+
+
+  if (
+    !savedState.botChannelId
+  ) {
+
+    console.log(
+      '🛑 Keine gespeicherte Kanal-ID.'
+    );
+
+
+    console.log(
+      '🛡️ Keine WhatsApp-Nachricht wird gelöscht.'
+    );
+
+
+    return false;
+  }
 
 
   assertPageAlive(
-    page,
+    client,
     'Bot-Meldung löschen'
   );
 
 
   console.log(
-    '================================'
+    '🔐 Gesuchte Bot-Message-ID:',
+    savedState.botMessageId
   );
 
 
-  console.log(
-    '🗑️ LÖSCHE AUSSCHLIESSLICH BOT-LIVE-MELDUNG'
-  );
+  /*
+   * Zuerst DIREKT über die eindeutige
+   * WhatsApp-Message-ID suchen.
+   */
+
+  let target =
+    null;
 
 
-  console.log(
-    '================================'
-  );
+  try {
 
+    target =
+      await client.getMessageById(
+        savedState.botMessageId
+      );
 
-  await openWhatsAppChannel(
-    page
-  );
-
-
-  const result =
-    await markExactBotMessageForDeletion(
-      page,
-      savedState
-    );
-
-
-  console.log(
-    '🔎 Bot-Meldung Suche:',
-    result
-  );
-
-
-  if (
-    !result.found
-  ) {
+  } catch (error) {
 
     console.log(
-      '🛑 Keine Löschung durchgeführt.'
+      '⚠️ getMessageById() konnte die Nachricht nicht direkt laden:',
+      error.message
     );
-
-
-    console.log(
-      '🛡️ Sicherheit: Andere Kanalbeiträge bleiben unangetastet.'
-    );
-
-
-    return false;
   }
 
 
-  const target =
-    await page.$(
-      '[data-bot-delete-target="true"]'
-    );
-
+  /*
+   * Fallback:
+   * Nur Nachrichten aus EXAKT dem
+   * gespeicherten Kanal laden.
+   */
 
   if (!target) {
 
-    return false;
-  }
-
-
-  /*
-   * Maus über die exakt erkannte
-   * Bot-Meldung bewegen.
-   */
-
-  const box =
-    await target.boundingBox();
-
-
-  if (!box) {
-
-    return false;
-  }
-
-
-  await page.mouse.move(
-
-    box.x +
-      box.width / 2,
-
-    box.y +
-      Math.min(
-        30,
-        box.height / 2
-      )
-  );
-
-
-  await sleep(
-    1200
-  );
-
-
-  /*
-   * Menü-Button NUR im Bereich
-   * dieser Nachricht suchen.
-   */
-
-  const menuMarked =
-    await page.evaluate(
-      () => {
-
-        function visible(
-          element
-        ) {
-
-          if (!element) {
-
-            return false;
-          }
-
-
-          const rect =
-            element.getBoundingClientRect();
-
-
-          return (
-            rect.width > 0 &&
-            rect.height > 0
-          );
-        }
-
-
-        const target =
-          document.querySelector(
-            '[data-bot-delete-target="true"]'
-          );
-
-
-        if (!target) {
-
-          return false;
-        }
-
-
-        let container =
-          target;
-
-
-        for (
-          let depth = 0;
-          depth < 6 &&
-          container;
-          depth++
-        ) {
-
-          const buttons =
-            [
-              ...container.querySelectorAll(
-                [
-                  'button',
-                  '[role="button"]',
-                  '[aria-label]',
-                  '[data-testid]'
-                ].join(',')
-              )
-            ].filter(
-              visible
-            );
-
-
-          const button =
-            buttons.find(
-              element => {
-
-                const aria =
-                  (
-                    element.getAttribute(
-                      'aria-label'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                const title =
-                  (
-                    element.getAttribute(
-                      'title'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                const testId =
-                  (
-                    element.getAttribute(
-                      'data-testid'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                const html =
-                  (
-                    element.innerHTML ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                return (
-                  aria.includes(
-                    'menü'
-                  ) ||
-                  aria.includes(
-                    'menu'
-                  ) ||
-                  aria.includes(
-                    'weitere'
-                  ) ||
-                  aria.includes(
-                    'more'
-                  ) ||
-                  title.includes(
-                    'menü'
-                  ) ||
-                  title.includes(
-                    'menu'
-                  ) ||
-                  testId.includes(
-                    'menu'
-                  ) ||
-                  html.includes(
-                    'down'
-                  ) ||
-                  html.includes(
-                    'chevron'
-                  )
-                );
-              }
-            );
-
-
-          if (button) {
-
-            button.setAttribute(
-              'data-bot-message-menu',
-              'true'
-            );
-
-
-            return true;
-          }
-
-
-          container =
-            container.parentElement;
-        }
-
-
-        return false;
-      }
-    );
-
-
-  if (!menuMarked) {
-
     console.log(
-      '⚠️ Menü der Bot-Meldung wurde nicht sicher gefunden.'
+      '🔎 Direkte Suche ohne Treffer – prüfe gespeicherten Kanal.'
     );
 
 
-    console.log(
-      '🛑 Keine Löschung.'
-    );
+    const channel =
+      await client.getChatById(
+        savedState.botChannelId
+      );
 
 
-    return false;
-  }
-
-
-  const menuButton =
-    await page.$(
-      '[data-bot-message-menu="true"]'
-    );
-
-
-  if (!menuButton) {
-
-    return false;
-  }
-
-
-  await menuButton.click({
-    delay: 100
-  });
-
-
-  await sleep(
-    1500
-  );
-
-
-  /*
-   * Jetzt explizit "Löschen".
-   */
-
-  const deleteMarked =
-    await page.evaluate(
-      () => {
-
-        function visible(
-          element
-        ) {
-
-          if (!element) {
-
-            return false;
-          }
-
-
-          const rect =
-            element.getBoundingClientRect();
-
-
-          const style =
-            window.getComputedStyle(
-              element
-            );
-
-
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !== 'none' &&
-            style.visibility !== 'hidden'
-          );
-        }
-
-
-        const elements =
-          [
-            ...document.querySelectorAll(
-              [
-                '[role="menuitem"]',
-                'button',
-                '[role="button"]',
-                '[tabindex]'
-              ].join(',')
-            )
-          ].filter(
-            visible
-          );
-
-
-        const deleteButton =
-          elements.find(
-            element => {
-
-              const text =
-                (
-                  element.textContent ||
-                  ''
-                )
-                  .replace(
-                    /\s+/g,
-                    ' '
-                  )
-                  .trim()
-                  .toLowerCase();
-
-
-              return (
-                text ===
-                  'löschen' ||
-                text ===
-                  'delete'
-              );
-            }
-          );
-
-
-        if (!deleteButton) {
-
-          return false;
-        }
-
-
-        deleteButton.setAttribute(
-          'data-bot-delete-button',
-          'true'
-        );
-
-
-        return true;
-      }
-    );
-
-
-  if (!deleteMarked) {
-
-    console.log(
-      '⚠️ Menüpunkt "Löschen" wurde nicht gefunden.'
-    );
-
-
-    return false;
-  }
-
-
-  const deleteButton =
-    await page.$(
-      '[data-bot-delete-button="true"]'
-    );
-
-
-  await deleteButton.click({
-    delay: 100
-  });
-
-
-  await sleep(
-    1500
-  );
-
-
-  /*
-   * Falls WhatsApp noch einen
-   * Bestätigungsdialog zeigt.
-   */
-
-  const confirmMarked =
-    await page.evaluate(
-      () => {
-
-        function visible(
-          element
-        ) {
-
-          if (!element) {
-
-            return false;
-          }
-
-
-          const rect =
-            element.getBoundingClientRect();
-
-
-          return (
-            rect.width > 0 &&
-            rect.height > 0
-          );
-        }
-
-
-        const dialogs =
-          [
-            ...document.querySelectorAll(
-              '[role="dialog"]'
-            )
-          ].filter(
-            visible
-          );
-
-
-        if (!dialogs.length) {
-
-          /*
-           * Offenbar direkt gelöscht.
-           */
-
-          return {
-            needed: false
-          };
-        }
-
-
-        const dialog =
-          dialogs[
-            dialogs.length - 1
-          ];
-
-
-        const buttons =
-          [
-            ...dialog.querySelectorAll(
-              [
-                'button',
-                '[role="button"]'
-              ].join(',')
-            )
-          ].filter(
-            visible
-          );
-
-
-        /*
-         * Vorrang für "Für alle löschen".
-         */
-
-        let confirm =
-          buttons.find(
-            element => {
-
-              const text =
-                (
-                  element.textContent ||
-                  ''
-                )
-                  .replace(
-                    /\s+/g,
-                    ' '
-                  )
-                  .trim()
-                  .toLowerCase();
-
-
-              return (
-                text.includes(
-                  'für alle löschen'
-                ) ||
-                text.includes(
-                  'delete for everyone'
-                )
-              );
-            }
-          );
-
-
-        if (!confirm) {
-
-          confirm =
-            buttons.find(
-              element => {
-
-                const text =
-                  (
-                    element.textContent ||
-                    ''
-                  )
-                    .replace(
-                      /\s+/g,
-                      ' '
-                    )
-                    .trim()
-                    .toLowerCase();
-
-
-                return (
-                  text ===
-                    'löschen' ||
-                  text ===
-                    'delete'
-                );
-              }
-            );
-        }
-
-
-        if (!confirm) {
-
-          return {
-            needed: true,
-            found: false
-          };
-        }
-
-
-        confirm.setAttribute(
-          'data-bot-confirm-delete',
-          'true'
-        );
-
-
-        return {
-          needed: true,
-          found: true
-        };
-      }
-    );
-
-
-  if (
-    confirmMarked.needed
-  ) {
-
-    if (
-      !confirmMarked.found
-    ) {
+    if (!channel) {
 
       console.log(
-        '⚠️ Lösch-Bestätigung wurde nicht sicher gefunden.'
+        '⚠️ Gespeicherter Kanal wurde nicht gefunden.'
       );
 
 
@@ -3233,84 +1355,173 @@ async function deleteBotLiveMessage(
     }
 
 
-    const confirmButton =
-      await page.$(
-        '[data-bot-confirm-delete="true"]'
+    if (
+      !channel.isChannel
+    ) {
+
+      console.log(
+        '🛑 Gespeicherte ID gehört nicht zu einem WhatsApp-Kanal.'
       );
 
 
-    await confirmButton.click({
-      delay: 120
-    });
+      return false;
+    }
 
 
-    await sleep(
-      3000
+    const messages =
+      await channel.fetchMessages({
+        limit:
+          100,
+
+        fromMe:
+          true
+      });
+
+
+    target =
+      messages.find(
+        item =>
+          item?.id?._serialized ===
+          savedState.botMessageId
+      );
+  }
+
+
+  if (!target) {
+
+    console.log(
+      '⚠️ Die gespeicherte Bot-Live-Meldung wurde nicht mehr gefunden.'
     );
+
+
+    console.log(
+      '🛡️ Es wird NICHT ersatzweise eine andere Nachricht gelöscht.'
+    );
+
+
+    return false;
   }
 
 
   /*
-   * Prüfen, ob die exakte Bot-Kennung
-   * verschwunden ist.
+   * SICHERHEIT 1:
+   * Exakte Message-ID muss stimmen.
    */
 
-  const stillExists =
-    await page.evaluate(
-      (
-        keyType,
-        keyValue
-      ) => {
+  const targetId =
+    target?.id?._serialized;
 
-        return [
-          ...document.querySelectorAll(
-            '*'
-          )
-        ].some(
-          element => {
 
-            return (
-              (
-                keyType ===
-                  'data-id' &&
-                element.getAttribute(
-                  'data-id'
-                ) ===
-                  keyValue
-              ) ||
+  if (
+    targetId !==
+    savedState.botMessageId
+  ) {
 
-              (
-                keyType ===
-                  'data-message-id' &&
-                element.getAttribute(
-                  'data-message-id'
-                ) ===
-                  keyValue
-              ) ||
-
-              (
-                keyType ===
-                  'data-pre-plain-text' &&
-                element.getAttribute(
-                  'data-pre-plain-text'
-                ) ===
-                  keyValue
-              )
-            );
-          }
-        );
-      },
-
-      savedState.botMessageKeyType,
-
-      savedState.botMessageKeyValue
+    console.log(
+      '🛑 Message-ID stimmt nicht exakt überein.'
     );
 
 
-  if (stillExists) {
+    console.log(
+      '🛡️ Keine Löschung.'
+    );
+
+
+    return false;
+  }
+
+
+  /*
+   * SICHERHEIT 2:
+   * Nachricht muss von unserem
+   * angemeldeten Account stammen.
+   */
+
+  if (
+    target.fromMe !==
+    true
+  ) {
 
     console.log(
-      '⚠️ Bot-Meldung ist nach dem Löschversuch noch vorhanden.'
+      '🛑 Gefundene Nachricht stammt nicht vom verbundenen WhatsApp-Account.'
+    );
+
+
+    console.log(
+      '🛡️ Keine Löschung.'
+    );
+
+
+    return false;
+  }
+
+
+  /*
+   * SICHERHEIT 3:
+   * Text muss exakt unsere
+   * Live-Meldungsmerkmale enthalten.
+   */
+
+  const body =
+    String(
+      target.body ||
+      ''
+    );
+
+
+  if (
+    !body.includes(
+      LIVE_MESSAGE_PHRASE
+    ) ||
+    !body.includes(
+      LIVE_URL
+    )
+  ) {
+
+    console.log(
+      '🛑 Message-ID gefunden, aber Inhalt ist nicht die Bot-Live-Meldung.'
+    );
+
+
+    console.log(
+      '🛡️ Keine Löschung.'
+    );
+
+
+    return false;
+  }
+
+
+  /*
+   * SICHERHEIT 4:
+   * Nachricht muss zum gespeicherten
+   * Kanal gehören.
+   *
+   * Bei Newsletter-/Channel-Messages kann
+   * die ID unterschiedliche Felder enthalten.
+   */
+
+  const remote =
+    target?.id?.remote ||
+    target?.from ||
+    null;
+
+
+  if (
+    remote &&
+    String(remote) !==
+      String(
+        savedState.botChannelId
+      )
+  ) {
+
+    console.log(
+      '🛑 Gefundene Nachricht gehört nicht zum gespeicherten Kanal.'
+    );
+
+
+    console.log(
+      '🛡️ Keine Löschung.'
     );
 
 
@@ -3319,12 +1530,111 @@ async function deleteBotLiveMessage(
 
 
   console.log(
-    '✅ Bot-Live-Meldung wurde erfolgreich gelöscht.'
+    '🎯 Exakte Bot-Live-Meldung eindeutig gefunden.'
   );
 
 
   console.log(
-    '🛡️ Keine andere Kanalnachricht wurde verändert.'
+    '🔐 Message-ID stimmt.'
+  );
+
+
+  console.log(
+    '👤 Nachricht stammt vom verbundenen Account.'
+  );
+
+
+  console.log(
+    '📝 Inhalt stimmt mit der Bot-Live-Meldung überein.'
+  );
+
+
+  /*
+   * ENTSCHEIDENDER BEFEHL:
+   *
+   * true = FÜR ALLE löschen.
+   */
+
+  await target.delete(
+    true
+  );
+
+
+  console.log(
+    '🗑️ Löschbefehl "FÜR ALLE" wurde ausgeführt.'
+  );
+
+
+  /*
+   * Kurz warten.
+   */
+
+  await sleep(
+    4000
+  );
+
+
+  /*
+   * Danach prüfen, ob die Nachricht
+   * noch abrufbar ist.
+   */
+
+  let stillExists =
+    false;
+
+
+  try {
+
+    const check =
+      await client.getMessageById(
+        savedState.botMessageId
+      );
+
+
+    if (
+      check &&
+      String(
+        check.body ||
+        ''
+      ).includes(
+        LIVE_MESSAGE_PHRASE
+      )
+    ) {
+
+      stillExists =
+        true;
+    }
+
+  } catch {
+
+    /*
+     * Nicht mehr auffindbar =
+     * gute Nachricht.
+     */
+
+    stillExists =
+      false;
+  }
+
+
+  if (stillExists) {
+
+    console.log(
+      '⚠️ Die Bot-Meldung scheint nach dem Löschbefehl noch vorhanden zu sein.'
+    );
+
+
+    return false;
+  }
+
+
+  console.log(
+    '✅ Bot-Live-Meldung wurde für alle entfernt.'
+  );
+
+
+  console.log(
+    '🛡️ Andere Kanalbeiträge wurden nicht angefasst.'
   );
 
 
@@ -3334,7 +1644,7 @@ async function deleteBotLiveMessage(
 
 /*
 ============================================================
-WHATSAPP STARTEN
+WHATSAPP-CLIENT EINMAL STARTEN
 ============================================================
 */
 
@@ -3346,7 +1656,8 @@ async function startWhatsApp(
   fs.mkdirSync(
     AUTH_DATA_PATH,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
@@ -3388,7 +1699,8 @@ async function startWhatsApp(
 
       puppeteer: {
 
-        headless: true,
+        headless:
+          true,
 
         args: [
 
@@ -3448,7 +1760,9 @@ async function startWhatsApp(
             );
 
 
-            if (!readySeen) {
+            if (
+              !readySeen
+            ) {
 
               readySeen =
                 true;
@@ -3473,6 +1787,32 @@ async function startWhatsApp(
 
 
         client.on(
+          'code',
+          code => {
+
+            console.log(
+              '================================'
+            );
+
+
+            console.log(
+              '📱 WHATSAPP KOPPLUNGSCODE:'
+            );
+
+
+            console.log(
+              code
+            );
+
+
+            console.log(
+              '================================'
+            );
+          }
+        );
+
+
+        client.on(
           'auth_failure',
           message => {
 
@@ -3489,12 +1829,21 @@ async function startWhatsApp(
           'disconnected',
           reason => {
 
-            if (!readySeen) {
+            if (
+              !readySeen
+            ) {
 
               reject(
                 new Error(
                   `WhatsApp wurde vor READY getrennt: ${reason}`
                 )
+              );
+
+            } else {
+
+              console.log(
+                '⚠️ WhatsApp getrennt:',
+                reason
               );
             }
           }
@@ -3514,9 +1863,18 @@ async function startWhatsApp(
     );
 
 
+  /*
+   * Initialisierung starten.
+   */
+
   const initializePromise =
     client.initialize();
 
+
+  /*
+   * Maximal 90 Sekunden
+   * auf READY warten.
+   */
 
   await withTimeout(
 
@@ -3528,8 +1886,24 @@ async function startWhatsApp(
   );
 
 
+  /*
+   * Danach auf stabile
+   * CONNECTED-Verbindung warten.
+   */
+
   await waitForStableWhatsApp(
     client
+  );
+
+
+  assertPageAlive(
+    client,
+    'nach READY'
+  );
+
+
+  console.log(
+    '✅ WhatsApp Web ist bereit.'
   );
 
 
@@ -3545,10 +1919,20 @@ async function startWhatsApp(
 
   } finally {
 
+    /*
+     * Noch kurz Zeit geben,
+     * bevor Browser geschlossen wird.
+     */
+
     await sleep(
       2500
     );
 
+
+    /*
+     * Eventuelle späte initialize()-Fehler
+     * abfangen.
+     */
 
     initializePromise.catch(
       error => {
@@ -3561,16 +1945,24 @@ async function startWhatsApp(
 
 
         if (
-          !message.includes(
+          message.includes(
             'Target closed'
           )
         ) {
 
           console.log(
-            '⚠️ initialize():',
-            message
+            '⚠️ Puppeteer meldete beim Beenden "Target closed".'
           );
+
+
+          return;
         }
+
+
+        console.log(
+          '⚠️ WhatsApp initialize():',
+          message
+        );
       }
     );
 
@@ -3609,7 +2001,8 @@ function createStore() {
   fs.mkdirSync(
     AUTH_DATA_PATH,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
@@ -3626,11 +2019,113 @@ function createStore() {
 
 /*
 ============================================================
+OFFENE ALTE BOT-MELDUNG LÖSCHEN
+============================================================
+*/
+
+async function tryPendingDeletion(
+  savedState
+) {
+
+  if (
+    !savedState.deletePending
+  ) {
+
+    return true;
+  }
+
+
+  console.log(
+    '🗑️ Es existiert noch eine vorgemerkte Bot-Meldung zur Löschung.'
+  );
+
+
+  if (
+    !savedState.botMessageId ||
+    !savedState.botChannelId
+  ) {
+
+    console.log(
+      '🛑 Vorgemerkte Löschung hat keine sichere Message-/Kanal-ID.'
+    );
+
+
+    console.log(
+      '🛡️ Keine Nachricht wird gelöscht.'
+    );
+
+
+    return false;
+  }
+
+
+  const store =
+    createStore();
+
+
+  try {
+
+    const deleted =
+      await startWhatsApp(
+        store,
+
+        async client => {
+
+          return await deleteBotLiveMessage(
+            client,
+            savedState
+          );
+        }
+      );
+
+
+    if (
+      deleted
+    ) {
+
+      await resetOfflineState();
+
+
+      console.log(
+        '✅ Vorgemerkte Bot-Live-Meldung entfernt.'
+      );
+
+
+      return true;
+    }
+
+
+    return false;
+
+  } catch (error) {
+
+    console.error(
+      '⚠️ Vorgemerkte Bot-Meldung konnte nicht gelöscht werden:',
+      error.message
+    );
+
+
+    await markDeletePending(
+      error
+    );
+
+
+    return false;
+  }
+}
+
+
+/*
+============================================================
 MAIN
 ============================================================
 */
 
 async function main() {
+
+  /*
+   * Secrets prüfen.
+   */
 
   if (
     !process.env.MONGODB_URI
@@ -3652,6 +2147,10 @@ async function main() {
   }
 
 
+  /*
+   * MongoDB verbinden.
+   */
+
   console.log(
     'Verbinde mit MongoDB...'
   );
@@ -3667,28 +2166,82 @@ async function main() {
   );
 
 
+  /*
+   * TikTok EINMAL prüfen.
+   */
+
   const currentLive =
     await checkTikTokLive();
 
 
-  const savedState =
+  let savedState =
     await getSavedState();
 
 
-  const oldLive =
-    Boolean(
-      savedState.live
-    );
-
-
   console.log(
-    `🗄️ Gespeicherter Status: ${oldLive ? 'LIVE' : 'offline'}`
+    `🗄️ Gespeicherter Status: ${savedState.live ? 'LIVE' : 'offline'}`
   );
 
 
   /*
   ==========================================================
-  OFFLINE
+  EVENTUELL NOCH OFFENE ALTE LÖSCHUNG
+  ==========================================================
+  */
+
+  if (
+    savedState.deletePending
+  ) {
+
+    const cleanupSuccessful =
+      await tryPendingDeletion(
+        savedState
+      );
+
+
+    if (
+      !cleanupSuccessful
+    ) {
+
+      console.log(
+        '⚠️ Alte Bot-Meldung konnte noch nicht sicher entfernt werden.'
+      );
+
+
+      /*
+       * Wenn er währenddessen wieder LIVE ist,
+       * senden wir bewusst keine neue Meldung,
+       * solange die alte noch nicht sauber
+       * abgearbeitet wurde.
+       */
+
+      if (
+        currentLive
+      ) {
+
+        console.log(
+          '🛡️ Kein neuer Live-Beitrag, solange eine alte Bot-Meldung noch zur Löschung vorgemerkt ist.'
+        );
+      }
+
+
+      return;
+    }
+
+
+    /*
+     * Status nach erfolgreicher
+     * Bereinigung neu laden.
+     */
+
+    savedState =
+      await getSavedState();
+  }
+
+
+  /*
+  ==========================================================
+  TIKTOK OFFLINE
   ==========================================================
   */
 
@@ -3697,69 +2250,34 @@ async function main() {
   ) {
 
     /*
-     * Es gab vorher einen Live-Start und
-     * der Bot hatte tatsächlich eine Meldung gesendet.
+     * Bot hatte während des vorherigen Lives
+     * tatsächlich eine WhatsApp-Meldung gesendet.
      */
 
     if (
-      (
-        oldLive ||
-        savedState.deletePending
-      ) &&
-      savedState.whatsappSent
+      savedState.live &&
+      savedState.whatsappSent &&
+      savedState.botMessageId &&
+      savedState.botChannelId
     ) {
 
       console.log(
-        '⚫ Jorne ist offline.'
+        '⚫ Jorne ist jetzt OFFLINE.'
       );
 
 
       console.log(
-        '🗑️ Die gespeicherte Bot-Live-Meldung soll entfernt werden.'
+        '🗑️ Exakt die gespeicherte Bot-Live-Meldung wird für alle entfernt.'
       );
-
-
-      /*
-       * Wenn keine eindeutige Kennung gespeichert wurde,
-       * wird ABSICHTLICH nichts gelöscht.
-       */
-
-      if (
-        !savedState.botMessageKeyType ||
-        !savedState.botMessageKeyValue
-      ) {
-
-        console.log(
-          '🛑 Keine sichere Nachrichtenkennung vorhanden.'
-        );
-
-
-        console.log(
-          '🛡️ Deshalb wird keine WhatsApp-Nachricht gelöscht.'
-        );
-
-
-        await setOfflineState({
-          deletionSuccessful:
-            false
-        });
-
-
-        return;
-      }
 
 
       const store =
         createStore();
 
 
-      let deleted =
-        false;
-
-
       try {
 
-        deleted =
+        const deleted =
           await startWhatsApp(
             store,
 
@@ -3772,74 +2290,99 @@ async function main() {
             }
           );
 
-      } catch (error) {
 
-        console.error(
-          '⚠️ Bot-Live-Meldung konnte nicht gelöscht werden:',
-          error.message
-        );
-      }
+        if (
+          deleted
+        ) {
 
-
-      if (deleted) {
-
-        await setOfflineState({
-          deletionSuccessful:
-            true
-        });
+          await resetOfflineState();
 
 
-        console.log(
-          '✅ Jorne offline.'
-        );
+          console.log(
+            '================================'
+          );
 
 
-        console.log(
-          '✅ Bot-Live-Meldung entfernt.'
-        );
+          console.log(
+            '✅ LIVE BEENDET'
+          );
 
 
-        console.log(
-          '✅ System für den nächsten Live-Start zurückgesetzt.'
-        );
+          console.log(
+            '✅ Bot-Live-Meldung für alle gelöscht.'
+          );
 
-      } else {
+
+          console.log(
+            '✅ System für nächsten Live-Start zurückgesetzt.'
+          );
+
+
+          console.log(
+            '================================'
+          );
+
+
+          return;
+        }
+
 
         /*
-         * TikTok ist trotzdem offline.
-         * Löschversuch wird vorgemerkt.
+         * Sichere Nachricht wurde nicht gelöscht:
+         * Daten BEHALTEN und später erneut versuchen.
          */
 
         await markDeletePending();
 
 
         console.log(
-          '⚠️ Bot-Meldung blieb bestehen.'
+          '⚠️ Bot-Meldung konnte nicht sicher gelöscht werden.'
         );
 
 
         console.log(
-          '➡️ Ein späterer Offline-Lauf darf erneut versuchen, ausschließlich diese gespeicherte Bot-Meldung zu löschen.'
+          '➡️ Exakte Message-ID bleibt gespeichert.'
         );
+
+
+        console.log(
+          '➡️ Nächster Offline-Run darf dieselbe Nachricht erneut versuchen.'
+        );
+
+
+        return;
+
+      } catch (error) {
+
+        await markDeletePending(
+          error
+        );
+
+
+        console.error(
+          '❌ Fehler beim Löschen der Bot-Live-Meldung:',
+          error
+        );
+
+
+        return;
       }
-
-
-      return;
     }
 
 
     /*
-     * Keine Bot-Meldung vorhanden.
+     * Live war gespeichert, aber es gibt
+     * keine Bot-Nachricht.
+     *
+     * Beispiel: WhatsApp-Senden war
+     * beim Live-Start fehlgeschlagen.
      */
 
     if (
-      oldLive
+      savedState.live
     ) {
 
-      await setOfflineState({
-        deletionSuccessful:
-          true
-      });
+      await resetOfflineState();
 
 
       console.log(
@@ -3848,7 +2391,12 @@ async function main() {
 
 
       console.log(
-        '✅ Status zurückgesetzt.'
+        '✅ Keine gespeicherte Bot-Live-Meldung vorhanden.'
+      );
+
+
+      console.log(
+        '✅ Status für nächsten Live-Start zurückgesetzt.'
       );
 
 
@@ -3872,13 +2420,13 @@ async function main() {
 
   /*
   ==========================================================
-  BEREITS LIVE
+  TIKTOK IST LIVE UND WAR VORHER SCHON LIVE
   ==========================================================
   */
 
   if (
     currentLive &&
-    oldLive
+    savedState.live
   ) {
 
     console.log(
@@ -3886,9 +2434,26 @@ async function main() {
     );
 
 
-    console.log(
-      '✅ Dieser Live-Start wurde bereits verarbeitet.'
-    );
+    if (
+      savedState.whatsappSent &&
+      savedState.botMessageId
+    ) {
+
+      console.log(
+        '✅ Bot-Live-Meldung wurde bereits gesendet.'
+      );
+
+
+      console.log(
+        '🔐 Message-ID ist gespeichert.'
+      );
+
+    } else {
+
+      console.log(
+        '⚠️ Dieser Live-Start wurde bereits verarbeitet.'
+      );
+    }
 
 
     console.log(
@@ -3902,7 +2467,7 @@ async function main() {
 
   /*
   ==========================================================
-  NEUER LIVE-START
+  OFFLINE → LIVE
   ==========================================================
   */
 
@@ -3915,10 +2480,17 @@ async function main() {
     await claimNewLiveStart();
 
 
-  if (!claimed) {
+  if (
+    !claimed
+  ) {
 
     console.log(
-      '✅ Ein anderer Lauf hat diesen Live-Start bereits übernommen.'
+      '✅ Ein anderer Workflow hat diesen Live-Start bereits übernommen.'
+    );
+
+
+    console.log(
+      '✅ Keine doppelte WhatsApp-Nachricht.'
     );
 
 
@@ -3927,7 +2499,7 @@ async function main() {
 
 
   console.log(
-    '🔒 Live-Start reserviert.'
+    '🔒 Live-Start für diesen Workflow reserviert.'
   );
 
 
@@ -3937,7 +2509,7 @@ async function main() {
 
   try {
 
-    const identity =
+    const result =
       await startWhatsApp(
         store,
 
@@ -3950,8 +2522,14 @@ async function main() {
       );
 
 
+    /*
+     * Echte WhatsApp-Message-ID
+     * und Kanal-ID dauerhaft speichern.
+     */
+
     await setWhatsAppSuccess(
-      identity
+      result.message,
+      result.channel
     );
 
 
@@ -3965,28 +2543,19 @@ async function main() {
     );
 
 
-    if (identity) {
-
-      console.log(
-        '🔐 Bot-Live-Meldung wurde eindeutig gespeichert.'
-      );
+    console.log(
+      '✅ Live-Meldung im WhatsApp-Kanal veröffentlicht.'
+    );
 
 
-      console.log(
-        '➡️ Beim Offline-Wechsel darf genau diese Nachricht gelöscht werden.'
-      );
-
-    } else {
-
-      console.log(
-        '⚠️ Keine eindeutige Nachrichtenkennung.'
-      );
+    console.log(
+      '🔐 Exakte Bot-Message-ID gespeichert.'
+    );
 
 
-      console.log(
-        '🛡️ Diese Meldung wird deshalb aus Sicherheitsgründen später NICHT automatisch gelöscht.'
-      );
-    }
+    console.log(
+      '➡️ Beim Offline-Wechsel darf NUR diese Nachricht für alle gelöscht werden.'
+    );
 
 
     console.log(
@@ -3995,8 +2564,20 @@ async function main() {
 
   } catch (error) {
 
+    /*
+     * Live-Status bleibt TRUE.
+     *
+     * Dadurch startet nicht jede Minute
+     * wieder WhatsApp.
+     */
+
     await setWhatsAppFailure(
       error
+    );
+
+
+    console.error(
+      '================================'
     );
 
 
@@ -4019,7 +2600,12 @@ async function main() {
 
 
     console.error(
-      '✅ Kein minutenweiser Sende-Loop.'
+      '✅ Kein minutenweiser WhatsApp-Sende-Loop.'
+    );
+
+
+    console.error(
+      '================================'
     );
 
 
@@ -4030,7 +2616,7 @@ async function main() {
 
 /*
 ============================================================
-START
+START + SAUBERES ENDE
 ============================================================
 */
 
