@@ -1,8 +1,16 @@
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
+
 const { MongoStore } = require('wwebjs-mongo');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
+
+
+/*
+============================================================
+EINSTELLUNGEN
+============================================================
+*/
 
 const TIKTOK_USERNAME = 'feliiiocean';
 const CHANNEL_NAME = 'Jorne_L1ve';
@@ -15,17 +23,20 @@ const LIVE_MESSAGE =
 const LIVE_MESSAGE_PHRASE =
   'Jorne ist jetzt LIVE auf TikTok!';
 
-const LIVE_URL =
-  `https://www.tiktok.com/@${TIKTOK_USERNAME}/live`;
-
-const CLIENT_ID = 'jorne-whatsapp-live';
+const CLIENT_ID =
+  'jorne-whatsapp-live';
 
 const AUTH_DATA_PATH =
   path.resolve('./.wwebjs_auth');
 
-const TIKTOK_TIMEOUT_MS = 20000;
-const WHATSAPP_READY_TIMEOUT_MS = 90000;
-const WHATSAPP_STABLE_MS = 10000;
+const TIKTOK_TIMEOUT_MS =
+  20000;
+
+const WHATSAPP_READY_TIMEOUT_MS =
+  90000;
+
+const WHATSAPP_STABLE_MS =
+  10000;
 
 
 /*
@@ -88,14 +99,12 @@ const TikTokState =
 
 
 async function getSavedState() {
-
   const state =
     await TikTokState
       .findOne({
         username: TIKTOK_USERNAME
       })
       .lean();
-
 
   return state || {
     username: TIKTOK_USERNAME,
@@ -115,7 +124,6 @@ LIVE-START RESERVIEREN
 */
 
 async function reserveLiveStart() {
-
   const result =
     await TikTokState.findOneAndUpdate(
       {
@@ -142,11 +150,9 @@ async function reserveLiveStart() {
       }
     );
 
-
   if (result) {
     return true;
   }
-
 
   const existing =
     await TikTokState
@@ -155,14 +161,11 @@ async function reserveLiveStart() {
       })
       .lean();
 
-
   if (existing) {
     return false;
   }
 
-
   try {
-
     await TikTokState.create({
       username: TIKTOK_USERNAME,
       live: true,
@@ -173,17 +176,14 @@ async function reserveLiveStart() {
       changedAt: new Date()
     });
 
-
     return true;
 
   } catch (error) {
-
     if (
       error?.code === 11000
     ) {
       return false;
     }
-
 
     throw error;
   }
@@ -199,7 +199,6 @@ SENDEN ERFOLGREICH
 async function markSendSuccess(
   sentAt
 ) {
-
   await TikTokState.updateOne(
     {
       username: TIKTOK_USERNAME
@@ -232,7 +231,6 @@ SENDEN FEHLGESCHLAGEN
 async function markSendFailure(
   error
 ) {
-
   await TikTokState.updateOne(
     {
       username: TIKTOK_USERNAME
@@ -270,7 +268,6 @@ LÖSCHUNG VORMERKEN
 async function markDeletePending(
   error = null
 ) {
-
   await TikTokState.updateOne(
     {
       username: TIKTOK_USERNAME
@@ -308,7 +305,6 @@ OFFLINE KOMPLETT ZURÜCKSETZEN
 */
 
 async function resetOfflineState() {
-
   await TikTokState.updateOne(
     {
       username: TIKTOK_USERNAME
@@ -345,15 +341,12 @@ class FixedMongoStore
     mongoose,
     dataPath
   }) {
-
     super({
       mongoose
     });
 
-
     this.fixedMongoose =
       mongoose;
-
 
     this.dataPath =
       dataPath;
@@ -361,10 +354,8 @@ class FixedMongoStore
 
 
   async save(options) {
-
     const session =
       options.session;
-
 
     const zipPath =
       path.join(
@@ -372,78 +363,65 @@ class FixedMongoStore
         `${session}.zip`
       );
 
-
     console.log(
       '💾 MongoStore: Speichere Sitzung aus:',
       zipPath
     );
-
 
     if (
       !fs.existsSync(
         zipPath
       )
     ) {
-
       throw new Error(
         `RemoteAuth-ZIP wurde nicht gefunden: ${zipPath}`
       );
     }
 
-
     const bucket =
       new this.fixedMongoose.mongo.GridFSBucket(
         this.fixedMongoose.connection.db,
-
         {
           bucketName:
             `whatsapp-${session}`
         }
       );
 
-
     await new Promise(
       (
         resolve,
         reject
       ) => {
-
         const readStream =
           fs.createReadStream(
             zipPath
           );
-
 
         const uploadStream =
           bucket.openUploadStream(
             `${session}.zip`
           );
 
-
         readStream.on(
           'error',
           reject
         );
 
-
         uploadStream.on(
           'error',
           reject
         );
-
 
         uploadStream.on(
           'finish',
           resolve
         );
 
-
         readStream.pipe(
           uploadStream
         );
       }
     );
-
 
     const documents =
       await bucket
@@ -457,25 +435,20 @@ class FixedMongoStore
         })
         .toArray();
 
-
     if (
       documents.length >
       1
     ) {
-
       for (
         const document
         of documents.slice(1)
       ) {
-
         try {
-
           await bucket.delete(
             document._id
           );
 
         } catch (error) {
-
           console.log(
             '⚠️ Alte Sicherung konnte nicht gelöscht werden:',
             error.message
@@ -483,7 +456,6 @@ class FixedMongoStore
         }
       }
     }
-
 
     console.log(
       '✅ WhatsApp-Sitzung erfolgreich in MongoDB gespeichert.'
@@ -499,7 +471,6 @@ HILFSFUNKTIONEN
 */
 
 function sleep(ms) {
-
   return new Promise(
     resolve =>
       setTimeout(
@@ -515,9 +486,7 @@ function withTimeout(
   milliseconds,
   message
 ) {
-
   let timeout;
-
 
   const timeoutPromise =
     new Promise(
@@ -525,32 +494,26 @@ function withTimeout(
         _,
         reject
       ) => {
-
         timeout =
           setTimeout(
             () => {
-
               const error =
                 new Error(
                   message
                 );
 
-
               error.name =
                 'TimeoutError';
-
 
               reject(
                 error
               );
-
             },
 
             milliseconds
           );
       }
     );
-
 
   return Promise
     .race([
@@ -559,7 +522,6 @@ function withTimeout(
     ])
     .finally(
       () => {
-
         clearTimeout(
           timeout
         );
@@ -572,21 +534,17 @@ function assertPageAlive(
   page,
   step
 ) {
-
   if (!page) {
-
     throw new Error(
       `WhatsApp-Seite fehlt bei "${step}".`
     );
   }
-
 
   if (
     typeof page.isClosed ===
       'function' &&
     page.isClosed()
   ) {
-
     throw new Error(
       `WhatsApp/Puppeteer-Seite wurde bei "${step}" geschlossen.`
     );
@@ -601,26 +559,21 @@ TIKTOK PRÜFEN
 */
 
 async function checkTikTokLive() {
-
   const module =
     await import(
       'tiktok-live-connector'
     );
 
-
   const TikTokLiveConnection =
     module.TikTokLiveConnection;
-
 
   if (
     !TikTokLiveConnection
   ) {
-
     throw new Error(
       'TikTokLiveConnection konnte nicht geladen werden.'
     );
   }
-
 
   const connection =
     new TikTokLiveConnection(
@@ -628,40 +581,29 @@ async function checkTikTokLive() {
       {}
     );
 
-
   try {
-
     console.log(
       `🔎 Prüfe TikTok-Status von @${TIKTOK_USERNAME} ...`
     );
 
-
     const live =
       await withTimeout(
-
         connection.fetchIsLive(),
-
         TIKTOK_TIMEOUT_MS,
-
         `TikTok antwortet nach ${TIKTOK_TIMEOUT_MS / 1000} Sekunden nicht.`
       );
-
 
     console.log(
       `📡 TikTok-Status: ${live ? 'LIVE 🔴' : 'offline ⚫'}`
     );
-
 
     return Boolean(
       live
     );
 
   } finally {
-
     try {
-
       await connection.disconnect();
-
     } catch {}
   }
 }
@@ -676,41 +618,31 @@ AUF STABILES WHATSAPP WARTEN
 async function waitForStableWhatsApp(
   client
 ) {
-
   console.log(
     '⏳ Warte, bis WhatsApp Web stabil ist...'
   );
 
-
   const started =
     Date.now();
 
-
   let stableSince =
     null;
-
 
   while (
     Date.now() -
       started <
     WHATSAPP_READY_TIMEOUT_MS
   ) {
-
     let state =
       null;
 
-
     try {
-
       state =
         await client.getState();
-
     } catch {}
-
 
     const page =
       client.pupPage;
-
 
     const pageAlive =
       page &&
@@ -720,53 +652,43 @@ async function waitForStableWhatsApp(
         !page.isClosed()
       );
 
-
     if (
       state ===
         'CONNECTED' &&
       pageAlive
     ) {
-
       if (
         !stableSince
       ) {
-
         stableSince =
           Date.now();
-
 
         console.log(
           '🟢 WhatsApp CONNECTED – Stabilitätsprüfung läuft...'
         );
       }
 
-
       if (
         Date.now() -
           stableSince >=
         WHATSAPP_STABLE_MS
       ) {
-
         console.log(
           `✅ WhatsApp seit ${WHATSAPP_STABLE_MS / 1000} Sekunden stabil CONNECTED.`
         );
-
 
         return;
       }
 
     } else {
-
       stableSince =
         null;
     }
-
 
     await sleep(
       1000
     );
   }
-
 
   throw new Error(
     'WhatsApp wurde nicht dauerhaft stabil CONNECTED.'
@@ -783,36 +705,29 @@ WHATSAPP-POPUP SCHLIESSEN
 async function closeWhatsAppPopup(
   page
 ) {
-
   assertPageAlive(
     page,
     'Popup-Prüfung'
   );
 
-
   const result =
     await page.evaluate(
       () => {
-
         function isVisible(
           element
         ) {
-
           if (!element) {
             return false;
           }
-
 
           const rect =
             element
               .getBoundingClientRect();
 
-
           const style =
             window.getComputedStyle(
               element
             );
-
 
           return (
             rect.width > 0 &&
@@ -826,7 +741,6 @@ async function closeWhatsAppPopup(
         function textOf(
           element
         ) {
-
           return (
             element?.textContent ||
             ''
@@ -845,28 +759,24 @@ async function closeWhatsAppPopup(
             '[data-testid="confirm-popup"]'
           );
 
-
         if (
           !popup ||
           !isVisible(
             popup
           )
         ) {
-
           popup =
             document.querySelector(
               '[data-testid="popup-contents"]'
             );
         }
 
-
         if (
           !popup ||
           !isVisible(
             popup
           )
         ) {
-
           popup =
             [
               ...document.querySelectorAll(
@@ -877,15 +787,12 @@ async function closeWhatsAppPopup(
             );
         }
 
-
         if (!popup) {
-
           return {
             found: false,
             closed: false
           };
         }
-
 
         const candidates =
           [
@@ -896,11 +803,9 @@ async function closeWhatsAppPopup(
             isVisible
           );
 
-
         let closeButton =
           candidates.find(
             element => {
-
               const aria =
                 (
                   element.getAttribute(
@@ -911,12 +816,10 @@ async function closeWhatsAppPopup(
                   .trim()
                   .toLowerCase();
 
-
               const text =
                 textOf(
                   element
                 );
-
 
               const html =
                 (
@@ -924,7 +827,6 @@ async function closeWhatsAppPopup(
                   ''
                 )
                   .toLowerCase();
-
 
               return (
                 aria.includes(
@@ -943,18 +845,14 @@ async function closeWhatsAppPopup(
             }
           );
 
-
         if (!closeButton) {
-
           closeButton =
             candidates.find(
               element => {
-
                 const text =
                   textOf(
                     element
                   );
-
 
                 return [
                   'ok',
@@ -970,18 +868,14 @@ async function closeWhatsAppPopup(
             );
         }
 
-
         if (!closeButton) {
-
           return {
             found: true,
             closed: false
           };
         }
 
-
         closeButton.click();
-
 
         return {
           found: true,
@@ -990,32 +884,25 @@ async function closeWhatsAppPopup(
       }
     );
 
-
   if (
     result.found &&
     result.closed
   ) {
-
     await sleep(
       2000
     );
 
-
     return;
   }
-
 
   if (
     result.found &&
     !result.closed
   ) {
-
     try {
-
       await page.keyboard.press(
         'Escape'
       );
-
 
       await sleep(
         1500
@@ -1035,35 +922,28 @@ RECHTE KANALANSICHT PRÜFEN
 async function inspectRightChannelArea(
   page
 ) {
-
   assertPageAlive(
     page,
     'Kanalansicht prüfen'
   );
 
-
   return await page.evaluate(
     channelName => {
-
       function isVisible(
         element
       ) {
-
         if (!element) {
           return false;
         }
-
 
         const rect =
           element
             .getBoundingClientRect();
 
-
         const style =
           window.getComputedStyle(
             element
           );
-
 
         return (
           rect.width > 0 &&
@@ -1073,11 +953,9 @@ async function inspectRightChannelArea(
         );
       }
 
-
       const channelNameLower =
         channelName
           .toLowerCase();
-
 
       const pageText =
         (
@@ -1090,7 +968,6 @@ async function inspectRightChannelArea(
           )
           .trim();
 
-
       const emptyState =
         pageText.includes(
           'Kanäle entdecken'
@@ -1098,7 +975,6 @@ async function inspectRightChannelArea(
         pageText.includes(
           'Folge den Kanälen, die dich interessieren'
         );
-
 
       const rightElements =
         [
@@ -1111,11 +987,9 @@ async function inspectRightChannelArea(
           )
           .filter(
             element => {
-
               const rect =
                 element
                   .getBoundingClientRect();
-
 
               return (
                 rect.left >
@@ -1125,11 +999,9 @@ async function inspectRightChannelArea(
             }
           );
 
-
       const channelNameVisibleRight =
         rightElements.some(
           element => {
-
             const text =
               (
                 element.textContent ||
@@ -1142,7 +1014,6 @@ async function inspectRightChannelArea(
                 .trim()
                 .toLowerCase();
 
-
             const aria =
               (
                 element.getAttribute(
@@ -1151,7 +1022,6 @@ async function inspectRightChannelArea(
                 ''
               )
                 .toLowerCase();
-
 
             return (
               text.includes(
@@ -1163,7 +1033,6 @@ async function inspectRightChannelArea(
             );
           }
         );
-
 
       return {
         emptyState,
@@ -1185,26 +1054,21 @@ WHATSAPP-KANAL ÖFFNEN
 async function openWhatsAppChannel(
   page
 ) {
-
   assertPageAlive(
     page,
     'Kanäle öffnen'
   );
 
-
   console.log(
     '🔎 Suche Bereich "Kanäle"...'
   );
 
-
   const channelsFound =
     await page.evaluate(
       () => {
-
         function normalize(
           value
         ) {
-
           return String(
             value ||
             ''
@@ -1221,16 +1085,13 @@ async function openWhatsAppChannel(
         function isVisible(
           element
         ) {
-
           if (!element) {
             return false;
           }
 
-
           const rect =
             element
               .getBoundingClientRect();
-
 
           return (
             rect.width > 0 &&
@@ -1273,14 +1134,12 @@ async function openWhatsAppChannel(
             target
           )
         ) {
-
           target =
             null;
         }
 
 
         if (!target) {
-
           target =
             elements.find(
               element =>
@@ -1295,7 +1154,6 @@ async function openWhatsAppChannel(
 
 
         if (!target) {
-
           target =
             elements.find(
               element =>
@@ -1311,7 +1169,6 @@ async function openWhatsAppChannel(
 
 
         if (!target) {
-
           target =
             elements.find(
               element =>
@@ -1347,7 +1204,6 @@ async function openWhatsAppChannel(
 
 
   if (!channelsFound) {
-
     throw new Error(
       'Bereich "Kanäle" wurde nicht gefunden.'
     );
@@ -1361,7 +1217,6 @@ async function openWhatsAppChannel(
 
 
   if (!channelsButton) {
-
     throw new Error(
       'Markierter Kanäle-Button wurde nicht gefunden.'
     );
@@ -1370,7 +1225,6 @@ async function openWhatsAppChannel(
 
   await channelsButton.evaluate(
     element => {
-
       element.scrollIntoView({
         block: 'center',
         inline: 'center'
@@ -1417,11 +1271,9 @@ async function openWhatsAppChannel(
   const channelFound =
     await page.evaluate(
       channelName => {
-
         function normalize(
           value
         ) {
-
           return String(
             value ||
             ''
@@ -1438,16 +1290,13 @@ async function openWhatsAppChannel(
         function isVisible(
           element
         ) {
-
           if (!element) {
             return false;
           }
 
-
           const rect =
             element
               .getBoundingClientRect();
-
 
           return (
             rect.width > 0 &&
@@ -1487,12 +1336,10 @@ async function openWhatsAppChannel(
         const target =
           cells.find(
             element => {
-
               const text =
                 normalize(
                   element.textContent
                 );
-
 
               const aria =
                 normalize(
@@ -1500,7 +1347,6 @@ async function openWhatsAppChannel(
                     'aria-label'
                   )
                 );
-
 
               return (
                 text.includes(
@@ -1531,7 +1377,6 @@ async function openWhatsAppChannel(
             window.innerWidth *
               0.55
         ) {
-
           return false;
         }
 
@@ -1550,7 +1395,6 @@ async function openWhatsAppChannel(
 
 
   if (!channelFound) {
-
     throw new Error(
       `Kanal "${CHANNEL_NAME}" wurde nicht gefunden.`
     );
@@ -1564,7 +1408,6 @@ async function openWhatsAppChannel(
 
 
   if (!channelHandle) {
-
     throw new Error(
       'Markierte Kanal-Zelle wurde nicht wiedergefunden.'
     );
@@ -1573,7 +1416,6 @@ async function openWhatsAppChannel(
 
   await channelHandle.evaluate(
     element => {
-
       element.scrollIntoView({
         block: 'center',
         inline: 'center'
@@ -1592,7 +1434,6 @@ async function openWhatsAppChannel(
 
 
   if (!box) {
-
     throw new Error(
       `Keine Klickposition für ${CHANNEL_NAME} verfügbar.`
     );
@@ -1600,7 +1441,6 @@ async function openWhatsAppChannel(
 
 
   await page.mouse.click(
-
     box.x +
       box.width / 2,
 
@@ -1643,7 +1483,6 @@ async function openWhatsAppChannel(
     check.emptyState &&
     !check.channelNameVisibleRight
   ) {
-
     console.log(
       '🔁 Kanalansicht noch nicht offen – zweiter Klick.'
     );
@@ -1656,15 +1495,12 @@ async function openWhatsAppChannel(
 
 
     if (secondHandle) {
-
       const secondBox =
         await secondHandle.boundingBox();
 
 
       if (secondBox) {
-
         await page.mouse.click(
-
           secondBox.x +
             secondBox.width / 2,
 
@@ -1701,7 +1537,6 @@ async function openWhatsAppChannel(
     check.emptyState &&
     !check.channelNameVisibleRight
   ) {
-
     throw new Error(
       `Kanal "${CHANNEL_NAME}" wurde rechts nicht geöffnet.`
     );
@@ -1728,7 +1563,6 @@ COMPOSER FINDEN
 async function markComposer(
   page
 ) {
-
   assertPageAlive(
     page,
     'Composer suchen'
@@ -1738,11 +1572,9 @@ async function markComposer(
   const found =
     await page.evaluate(
       () => {
-
         function isVisible(
           element
         ) {
-
           if (!element) {
             return false;
           }
@@ -1792,14 +1624,12 @@ async function markComposer(
             target
           )
         ) {
-
           target =
             null;
         }
 
 
         if (!target) {
-
           const candidates =
             [
               ...document.querySelectorAll(
@@ -1813,7 +1643,6 @@ async function markComposer(
           target =
             candidates.find(
               element => {
-
                 const rect =
                   element
                     .getBoundingClientRect();
@@ -1874,7 +1703,6 @@ async function markComposer(
 
 
   if (!found) {
-
     throw new Error(
       'Meldungsfeld wurde nicht gefunden.'
     );
@@ -1897,7 +1725,6 @@ async function typeMultilineMessage(
   page,
   message
 ) {
-
   assertPageAlive(
     page,
     'Text eingeben'
@@ -1915,13 +1742,11 @@ async function typeMultilineMessage(
     index < lines.length;
     index++
   ) {
-
     const line =
       lines[index];
 
 
     if (line) {
-
       await page.keyboard.type(
         line,
         {
@@ -1935,7 +1760,6 @@ async function typeMultilineMessage(
       index <
       lines.length - 1
     ) {
-
       await page.keyboard.down(
         'Shift'
       );
@@ -1958,17 +1782,25 @@ async function typeMultilineMessage(
 ============================================================
 BOT-LIVE-MELDUNGEN FINDEN
 
-FIX:
-- bevorzugt echte WhatsApp-Nachrichtencontainer
-- keine zehn verschachtelten Text-Elemente mehr
-- identische Treffer werden zusammengeführt
+WICHTIGER FIX:
+
+Die vorhandene Kanalnachricht wird beim späteren Öffnen
+NICHT mehr gleichzeitig über Text + komplette TikTok-URL
+gesucht.
+
+WhatsApp stellt Links in Kanalbeiträgen teilweise anders
+im DOM dar. Deshalb reicht die eindeutige Phrase:
+
+"Jorne ist jetzt LIVE auf TikTok!"
+
+Damit kann die Nachricht auch beim Offline-Wechsel wieder
+gefunden werden.
 ============================================================
 */
 
 async function findBotLiveMessageCandidates(
   page
 ) {
-
   assertPageAlive(
     page,
     'Bot-Live-Meldungen suchen'
@@ -1977,15 +1809,10 @@ async function findBotLiveMessageCandidates(
 
   const candidates =
     await page.evaluate(
-      (
-        phrase,
-        liveUrl
-      ) => {
-
+      phrase => {
         function normalize(
           value
         ) {
-
           return String(
             value ||
             ''
@@ -2001,7 +1828,6 @@ async function findBotLiveMessageCandidates(
         function isVisible(
           element
         ) {
-
           if (!element) {
             return false;
           }
@@ -2030,20 +1856,14 @@ async function findBotLiveMessageCandidates(
         function containsMessageText(
           element
         ) {
-
           const text =
             normalize(
               element?.textContent
             );
 
 
-          return (
-            text.includes(
-              phrase
-            ) &&
-            text.includes(
-              liveUrl
-            )
+          return text.includes(
+            phrase
           );
         }
 
@@ -2051,7 +1871,6 @@ async function findBotLiveMessageCandidates(
         function isPlausibleMessageContainer(
           element
         ) {
-
           if (
             !element ||
             !isVisible(
@@ -2061,7 +1880,6 @@ async function findBotLiveMessageCandidates(
               element
             )
           ) {
-
             return false;
           }
 
@@ -2070,6 +1888,10 @@ async function findBotLiveMessageCandidates(
             element
               .getBoundingClientRect();
 
+
+          /*
+           * Nur rechte Kanalansicht.
+           */
 
           if (
             rect.left <
@@ -2080,6 +1902,11 @@ async function findBotLiveMessageCandidates(
           }
 
 
+          /*
+           * Zu kleine Text-/Icon-Elemente
+           * ignorieren.
+           */
+
           if (
             rect.width < 180 ||
             rect.height < 45
@@ -2087,6 +1914,11 @@ async function findBotLiveMessageCandidates(
             return false;
           }
 
+
+          /*
+           * Riesige Container wie die ganze
+           * rechte Seite ignorieren.
+           */
 
           if (
             rect.width >
@@ -2126,11 +1958,11 @@ async function findBotLiveMessageCandidates(
           [];
 
 
-        /*
-         * ERSTE WAHL:
-         * WhatsApp-Nachrichtencontainer
-         * besitzen häufig data-id.
-         */
+/*
+------------------------------------------------------------
+1. WAHL: WHATSAPP-MESSAGE-CONTAINER MIT data-id
+------------------------------------------------------------
+*/
 
         const dataIdMatches =
           [
@@ -2146,26 +1978,20 @@ async function findBotLiveMessageCandidates(
           const element
           of dataIdMatches
         ) {
-
           const duplicate =
             chosen.some(
-              existing => {
-
-                return (
-                  existing === element ||
-                  existing.contains(
-                    element
-                  ) ||
-                  element.contains(
-                    existing
-                  )
-                );
-              }
+              existing =>
+                existing === element ||
+                existing.contains(
+                  element
+                ) ||
+                element.contains(
+                  existing
+                )
             );
 
 
           if (!duplicate) {
-
             chosen.push(
               element
             );
@@ -2173,15 +1999,15 @@ async function findBotLiveMessageCandidates(
         }
 
 
-        /*
-         * ZWEITE WAHL:
-         * typische Message-Container.
-         */
+/*
+------------------------------------------------------------
+2. WAHL: TYPISCHE MESSAGE-CONTAINER
+------------------------------------------------------------
+*/
 
         if (
           chosen.length === 0
         ) {
-
           const semanticMatches =
             [
               ...document.querySelectorAll(
@@ -2196,26 +2022,20 @@ async function findBotLiveMessageCandidates(
             const element
             of semanticMatches
           ) {
-
             const duplicate =
               chosen.some(
-                existing => {
-
-                  return (
-                    existing === element ||
-                    existing.contains(
-                      element
-                    ) ||
-                    element.contains(
-                      existing
-                    )
-                  );
-                }
+                existing =>
+                  existing === element ||
+                  existing.contains(
+                    element
+                  ) ||
+                  element.contains(
+                    existing
+                  )
               );
 
 
             if (!duplicate) {
-
               chosen.push(
                 element
               );
@@ -2224,16 +2044,15 @@ async function findBotLiveMessageCandidates(
         }
 
 
-        /*
-         * FALLBACK:
-         * Texttreffer suchen und
-         * nach oben zum Nachrichtencontainer gehen.
-         */
+/*
+------------------------------------------------------------
+3. FALLBACK: TEXT FINDEN UND ELTERN-CONTAINER BESTIMMEN
+------------------------------------------------------------
+*/
 
         if (
           chosen.length === 0
         ) {
-
           const rawMatches =
             [
               ...document.querySelectorAll(
@@ -2244,14 +2063,27 @@ async function findBotLiveMessageCandidates(
                 isVisible
               )
               .filter(
-                containsMessageText
+                element => {
+                  const rect =
+                    element
+                      .getBoundingClientRect();
+
+
+                  return (
+                    rect.left >
+                      window.innerWidth *
+                        0.30 &&
+                    containsMessageText(
+                      element
+                    )
+                  );
+                }
               )
               .sort(
                 (
                   a,
                   b
                 ) => {
-
                   const ar =
                     a.getBoundingClientRect();
 
@@ -2274,7 +2106,6 @@ async function findBotLiveMessageCandidates(
             const raw
             of rawMatches
           ) {
-
             let current =
               raw;
 
@@ -2289,13 +2120,11 @@ async function findBotLiveMessageCandidates(
               current;
               depth++
             ) {
-
               if (
                 isPlausibleMessageContainer(
                   current
                 )
               ) {
-
                 best =
                   current;
 
@@ -2313,10 +2142,13 @@ async function findBotLiveMessageCandidates(
 
 
                 const testId =
-                  current.getAttribute(
-                    'data-testid'
-                  ) ||
-                  '';
+                  (
+                    current.getAttribute(
+                      'data-testid'
+                    ) ||
+                    ''
+                  )
+                    .toLowerCase();
 
 
                 if (
@@ -2325,18 +2157,13 @@ async function findBotLiveMessageCandidates(
                     'row' ||
                   role ===
                     'listitem' ||
-                  testId
-                    .toLowerCase()
-                    .includes(
-                      'msg'
-                    ) ||
-                  testId
-                    .toLowerCase()
-                    .includes(
-                      'message'
-                    )
+                  testId.includes(
+                    'msg'
+                  ) ||
+                  testId.includes(
+                    'message'
+                  )
                 ) {
-
                   break;
                 }
               }
@@ -2354,23 +2181,18 @@ async function findBotLiveMessageCandidates(
 
             const duplicate =
               chosen.some(
-                existing => {
-
-                  return (
-                    existing === best ||
-                    existing.contains(
-                      best
-                    ) ||
-                    best.contains(
-                      existing
-                    )
-                  );
-                }
+                existing =>
+                  existing === best ||
+                  existing.contains(
+                    best
+                  ) ||
+                  best.contains(
+                    existing
+                  )
               );
 
 
             if (!duplicate) {
-
               chosen.push(
                 best
               );
@@ -2379,9 +2201,11 @@ async function findBotLiveMessageCandidates(
         }
 
 
-        /*
-         * GEOMETRISCHE DEDUPLIZIERUNG
-         */
+/*
+------------------------------------------------------------
+GEOMETRISCHE DEDUPLIZIERUNG
+------------------------------------------------------------
+*/
 
         const deduped =
           [];
@@ -2391,7 +2215,6 @@ async function findBotLiveMessageCandidates(
           const element
           of chosen
         ) {
-
           const rect =
             element
               .getBoundingClientRect();
@@ -2400,7 +2223,6 @@ async function findBotLiveMessageCandidates(
           const duplicate =
             deduped.some(
               existing => {
-
                 const other =
                   existing
                     .getBoundingClientRect();
@@ -2429,7 +2251,6 @@ async function findBotLiveMessageCandidates(
 
 
           if (!duplicate) {
-
             deduped.push(
               element
             );
@@ -2462,7 +2283,6 @@ async function findBotLiveMessageCandidates(
             element,
             index
           ) => {
-
             element.setAttribute(
               'data-bot-live-candidate',
               String(
@@ -2478,7 +2298,6 @@ async function findBotLiveMessageCandidates(
             element,
             index
           ) => {
-
             const rect =
               element
                 .getBoundingClientRect();
@@ -2520,9 +2339,7 @@ async function findBotLiveMessageCandidates(
         );
       },
 
-      LIVE_MESSAGE_PHRASE,
-
-      LIVE_URL
+      LIVE_MESSAGE_PHRASE
     );
 
 
@@ -2534,7 +2351,6 @@ async function findBotLiveMessageCandidates(
   if (
     candidates.length
   ) {
-
     console.log(
       '🧭 Kandidaten:',
       JSON.stringify(
@@ -2557,7 +2373,6 @@ BOT-MELDUNG NACH SENDEN PRÜFEN
 async function verifyLiveMessageVisible(
   page
 ) {
-
   const candidates =
     await findBotLiveMessageCandidates(
       page
@@ -2567,7 +2382,6 @@ async function verifyLiveMessageVisible(
   if (
     candidates.length < 1
   ) {
-
     throw new Error(
       'Live-Meldung wurde nach dem Absenden nicht sicher im Kanal gefunden.'
     );
@@ -2592,7 +2406,6 @@ LIVE-MELDUNG SENDEN
 async function sendLiveMessage(
   client
 ) {
-
   const state =
     await client.getState();
 
@@ -2601,7 +2414,6 @@ async function sendLiveMessage(
     state !==
     'CONNECTED'
   ) {
-
     throw new Error(
       `WhatsApp ist nicht CONNECTED, sondern ${state}.`
     );
@@ -2650,7 +2462,6 @@ async function sendLiveMessage(
 
 
   if (!composer) {
-
     throw new Error(
       'Meldungsfeld wurde nicht wiedergefunden.'
     );
@@ -2659,7 +2470,6 @@ async function sendLiveMessage(
 
   await composer.evaluate(
     element => {
-
       element.scrollIntoView({
         block: 'center',
         inline: 'center'
@@ -2735,14 +2545,6 @@ async function sendLiveMessage(
 /*
 ============================================================
 MENÜ DER EXAKTEN BOT-MELDUNG FINDEN
-
-FIX:
-Das Menü wird nicht mehr nur innerhalb
-des Text-Elements gesucht.
-
-Nach dem Hover wird zusätzlich nach
-einem passenden Menüknopf direkt in
-der Umgebung der Nachricht gesucht.
 ============================================================
 */
 
@@ -2750,7 +2552,6 @@ async function markMenuButtonForCandidate(
   page,
   candidateIndex
 ) {
-
   const candidateSelector =
     `[data-bot-live-candidate="${candidateIndex}"]`;
 
@@ -2768,7 +2569,6 @@ async function markMenuButtonForCandidate(
 
   await target.evaluate(
     element => {
-
       element.scrollIntoView({
         block: 'center',
         inline: 'nearest'
@@ -2790,12 +2590,6 @@ async function markMenuButtonForCandidate(
     return false;
   }
 
-
-  /*
-   * Mehrere Hoverpositionen.
-   * WhatsApp zeigt das Menü teilweise
-   * erst an der rechten oberen Ecke.
-   */
 
   const hoverPoints =
     [
@@ -2850,7 +2644,6 @@ async function markMenuButtonForCandidate(
     ]
     of hoverPoints
   ) {
-
     await page.mouse.move(
       x,
       y,
@@ -2883,11 +2676,9 @@ async function markMenuButtonForCandidate(
           targetBox
         }
       ) => {
-
         function visible(
           element
         ) {
-
           if (!element) {
             return false;
           }
@@ -2916,7 +2707,6 @@ async function markMenuButtonForCandidate(
         function descriptor(
           element
         ) {
-
           const aria =
             (
               element.getAttribute(
@@ -2992,7 +2782,6 @@ async function markMenuButtonForCandidate(
         function looksLikeMenu(
           element
         ) {
-
           const d =
             descriptor(
               element
@@ -3075,7 +2864,6 @@ async function markMenuButtonForCandidate(
 
 
         if (!target) {
-
           return {
             found: false,
             reason:
@@ -3083,12 +2871,6 @@ async function markMenuButtonForCandidate(
           };
         }
 
-
-        /*
-         * ZUERST:
-         * innerhalb der Nachricht und
-         * bis 12 Eltern hoch.
-         */
 
         let container =
           target;
@@ -3100,7 +2882,6 @@ async function markMenuButtonForCandidate(
           container;
           depth++
         ) {
-
           const buttons =
             [
               ...container.querySelectorAll(
@@ -3115,7 +2896,6 @@ async function markMenuButtonForCandidate(
             const raw
             of buttons
           ) {
-
             const clickable =
               raw.closest(
                 'button,[role="button"],[tabindex]'
@@ -3131,7 +2911,6 @@ async function markMenuButtonForCandidate(
                 raw
               )
             ) {
-
               clickable.setAttribute(
                 'data-bot-message-menu',
                 'true'
@@ -3151,13 +2930,6 @@ async function markMenuButtonForCandidate(
             container.parentElement;
         }
 
-
-        /*
-         * FALLBACK:
-         * global sichtbare Buttons suchen,
-         * aber ausschließlich unmittelbar
-         * neben der Nachricht.
-         */
 
         const globalElements =
           [
@@ -3187,7 +2959,6 @@ async function markMenuButtonForCandidate(
           const raw
           of globalElements
         ) {
-
           if (
             !looksLikeMenu(
               raw
@@ -3254,7 +3025,6 @@ async function markMenuButtonForCandidate(
             horizontalOkay &&
             verticalOkay
           ) {
-
             const dx =
               Math.abs(
                 (
@@ -3296,7 +3066,6 @@ async function markMenuButtonForCandidate(
         if (
           nearby.length
         ) {
-
           nearby[0]
             .clickable
             .setAttribute(
@@ -3336,7 +3105,6 @@ async function markMenuButtonForCandidate(
   if (
     !menuMarked?.found
   ) {
-
     console.log(
       '⚠️ Nachrichtenmenü nicht gefunden:',
       menuMarked?.reason ||
@@ -3366,14 +3134,11 @@ MENÜPUNKT "LÖSCHEN" FINDEN
 async function markDeleteMenuItem(
   page
 ) {
-
   return await page.evaluate(
     () => {
-
       function visible(
         element
       ) {
-
         if (!element) {
           return false;
         }
@@ -3424,7 +3189,6 @@ async function markDeleteMenuItem(
       const deleteButton =
         elements.find(
           element => {
-
             const text =
               (
                 element.textContent ||
@@ -3474,14 +3238,11 @@ AUSSCHLIESSLICH "FÜR ALLE LÖSCHEN" FINDEN
 async function markDeleteForEveryoneButton(
   page
 ) {
-
   return await page.evaluate(
     () => {
-
       function visible(
         element
       ) {
-
         if (!element) {
           return false;
         }
@@ -3532,7 +3293,6 @@ async function markDeleteForEveryoneButton(
       if (
         !dialogs.length
       ) {
-
         return {
           dialogFound: false,
           buttonFound: false
@@ -3559,7 +3319,6 @@ async function markDeleteForEveryoneButton(
       const confirm =
         buttons.find(
           element => {
-
             const text =
               (
                 element.textContent ||
@@ -3586,7 +3345,6 @@ async function markDeleteForEveryoneButton(
 
 
       if (!confirm) {
-
         return {
           dialogFound: true,
           buttonFound: false
@@ -3619,7 +3377,6 @@ async function deleteOneBotCandidate(
   page,
   candidateIndex
 ) {
-
   console.log(
     `🗑️ Löschversuch für Bot-Live-Kandidat ${candidateIndex}...`
   );
@@ -3633,7 +3390,6 @@ async function deleteOneBotCandidate(
 
 
   if (!menuMarked) {
-
     console.log(
       '⚠️ Nachrichtenmenü wurde für diese Bot-Meldung nicht sicher gefunden.'
     );
@@ -3671,18 +3427,15 @@ async function deleteOneBotCandidate(
 
 
   if (!deleteMarked) {
-
     console.log(
       '⚠️ Menüpunkt "Löschen" wurde nicht gefunden.'
     );
 
 
     try {
-
       await page.keyboard.press(
         'Escape'
       );
-
     } catch {}
 
 
@@ -3720,7 +3473,6 @@ async function deleteOneBotCandidate(
   if (
     !confirmation.dialogFound
   ) {
-
     console.log(
       '⚠️ Kein Lösch-Bestätigungsdialog gefunden.'
     );
@@ -3738,7 +3490,6 @@ async function deleteOneBotCandidate(
   if (
     !confirmation.buttonFound
   ) {
-
     console.log(
       '🛑 "Für alle löschen" wurde NICHT angeboten.'
     );
@@ -3750,11 +3501,9 @@ async function deleteOneBotCandidate(
 
 
     try {
-
       await page.keyboard.press(
         'Escape'
       );
-
     } catch {}
 
 
@@ -3806,7 +3555,6 @@ ALLE SICHTBAREN BOT-LIVE-MELDUNGEN LÖSCHEN
 async function deleteBotLiveMessages(
   client
 ) {
-
   const state =
     await client.getState();
 
@@ -3815,7 +3563,6 @@ async function deleteBotLiveMessages(
     state !==
     'CONNECTED'
   ) {
-
     throw new Error(
       `WhatsApp ist nicht CONNECTED, sondern ${state}.`
     );
@@ -3856,16 +3603,15 @@ async function deleteBotLiveMessages(
     0;
 
 
-  /*
-   * Nach jeder Löschung suchen wir
-   * die Oberfläche komplett neu.
-   */
-
   for (
     let round = 1;
     round <= 10;
     round++
   ) {
+    console.log(
+      `🔎 Löschrunde ${round}/10 ...`
+    );
+
 
     const candidates =
       await findBotLiveMessageCandidates(
@@ -3876,7 +3622,6 @@ async function deleteBotLiveMessages(
     if (
       candidates.length === 0
     ) {
-
       console.log(
         '🔎 Keine weitere Bot-Live-Meldung gefunden.'
       );
@@ -3894,7 +3639,6 @@ async function deleteBotLiveMessages(
 
 
     if (!deleted) {
-
       console.log(
         '🛑 Löschung konnte nicht sicher abgeschlossen werden.'
       );
@@ -3932,7 +3676,6 @@ async function deleteBotLiveMessages(
   if (
     remaining.length > 0
   ) {
-
     console.log(
       '⚠️ Mindestens eine Bot-Live-Meldung ist noch sichtbar.'
     );
@@ -3950,7 +3693,6 @@ async function deleteBotLiveMessages(
   if (
     totalDeleted === 0
   ) {
-
     console.log(
       'ℹ️ Keine passende Bot-Live-Meldung mehr vorhanden.'
     );
@@ -4007,7 +3749,6 @@ async function startWhatsApp(
   store,
   action
 ) {
-
   fs.mkdirSync(
     AUTH_DATA_PATH,
     {
@@ -4018,10 +3759,8 @@ async function startWhatsApp(
 
   const client =
     new Client({
-
       authStrategy:
         new RemoteAuth({
-
           clientId:
             CLIENT_ID,
 
@@ -4039,7 +3778,6 @@ async function startWhatsApp(
 
 
       pairWithPhoneNumber: {
-
         phoneNumber:
           process.env.WHATSAPP_PHONE,
 
@@ -4052,27 +3790,19 @@ async function startWhatsApp(
 
 
       puppeteer: {
-
         headless:
           true,
 
         args: [
-
           '--no-sandbox',
-
           '--disable-setuid-sandbox',
-
           '--disable-dev-shm-usage',
-
           '--disable-gpu',
-
           '--no-zygote',
-
           '--window-size=1365,900'
         ],
 
         defaultViewport: {
-
           width:
             1365,
 
@@ -4093,11 +3823,9 @@ async function startWhatsApp(
         resolve,
         reject
       ) => {
-
         client.on(
           'authenticated',
           () => {
-
             console.log(
               '✅ WhatsApp erfolgreich angemeldet.'
             );
@@ -4108,7 +3836,6 @@ async function startWhatsApp(
         client.on(
           'ready',
           () => {
-
             console.log(
               '✅ WhatsApp READY-Event erhalten.'
             );
@@ -4117,7 +3844,6 @@ async function startWhatsApp(
             if (
               !readySeen
             ) {
-
               readySeen =
                 true;
 
@@ -4131,7 +3857,6 @@ async function startWhatsApp(
         client.on(
           'change_state',
           state => {
-
             console.log(
               '🔄 WhatsApp Statusänderung:',
               state
@@ -4141,22 +3866,20 @@ async function startWhatsApp(
 
 
         /*
-         * Repository ist öffentlich.
-         * Kopplungscode deshalb NICHT
-         * öffentlich ins Actions-Log schreiben.
+         * Repository öffentlich:
+         * Kopplungscode NICHT ins Actions-Log schreiben.
          */
 
         client.on(
           'code',
           () => {
-
             console.log(
               '📱 WhatsApp benötigt einen neuen Kopplungscode.'
             );
 
 
             console.log(
-              '🛡️ Der Code wird aus Sicherheitsgründen nicht im öffentlichen Actions-Log ausgegeben.'
+              '🛡️ Kopplungscode wird nicht im öffentlichen Actions-Log ausgegeben.'
             );
           }
         );
@@ -4165,7 +3888,6 @@ async function startWhatsApp(
         client.on(
           'auth_failure',
           message => {
-
             reject(
               new Error(
                 `WhatsApp-Anmeldung fehlgeschlagen: ${message}`
@@ -4178,11 +3900,9 @@ async function startWhatsApp(
         client.on(
           'disconnected',
           reason => {
-
             if (
               !readySeen
             ) {
-
               reject(
                 new Error(
                   `WhatsApp wurde vor READY getrennt: ${reason}`
@@ -4190,7 +3910,6 @@ async function startWhatsApp(
               );
 
             } else {
-
               console.log(
                 '⚠️ WhatsApp getrennt:',
                 reason
@@ -4203,7 +3922,6 @@ async function startWhatsApp(
         client.on(
           'remote_session_saved',
           () => {
-
             console.log(
               '💾 REMOTE SESSION SAVED.'
             );
@@ -4218,11 +3936,8 @@ async function startWhatsApp(
 
 
   await withTimeout(
-
     readyPromise,
-
     WHATSAPP_READY_TIMEOUT_MS,
-
     'WhatsApp wurde innerhalb von 90 Sekunden nicht READY.'
   );
 
@@ -4251,14 +3966,12 @@ async function startWhatsApp(
 
 
   try {
-
     result =
       await action(
         client
       );
 
   } finally {
-
     await sleep(
       2500
     );
@@ -4266,7 +3979,6 @@ async function startWhatsApp(
 
     initializePromise.catch(
       error => {
-
         const message =
           String(
             error?.message ||
@@ -4279,7 +3991,6 @@ async function startWhatsApp(
             'Target closed'
           )
         ) {
-
           console.log(
             '⚠️ Puppeteer meldete beim Beenden "Target closed".'
           );
@@ -4298,7 +4009,6 @@ async function startWhatsApp(
 
 
     try {
-
       await client.destroy();
 
 
@@ -4307,7 +4017,6 @@ async function startWhatsApp(
       );
 
     } catch (error) {
-
       console.log(
         '⚠️ WhatsApp-Client konnte nicht sauber beendet werden:',
         error.message
@@ -4327,7 +4036,6 @@ STORE ERSTELLEN
 */
 
 function createStore() {
-
   fs.mkdirSync(
     AUTH_DATA_PATH,
     {
@@ -4337,7 +4045,6 @@ function createStore() {
 
 
   return new FixedMongoStore({
-
     mongoose,
 
     dataPath:
@@ -4355,7 +4062,6 @@ OFFLINE-BEHANDLUNG
 async function handleOffline(
   savedState
 ) {
-
   const oldLive =
     Boolean(
       savedState.live
@@ -4373,7 +4079,6 @@ async function handleOffline(
     !oldLive &&
     !shouldDelete
   ) {
-
     console.log(
       '⚫ Jorne ist weiterhin offline.'
     );
@@ -4396,7 +4101,6 @@ async function handleOffline(
   if (
     !shouldDelete
   ) {
-
     await resetOfflineState();
 
 
@@ -4427,7 +4131,6 @@ async function handleOffline(
 
 
   try {
-
     const result =
       await startWhatsApp(
         store,
@@ -4442,7 +4145,6 @@ async function handleOffline(
     if (
       result?.success
     ) {
-
       await resetOfflineState();
 
 
@@ -4497,7 +4199,6 @@ async function handleOffline(
     );
 
   } catch (error) {
-
     await markDeletePending(
       error
     );
@@ -4537,7 +4238,6 @@ LIVE-BEHANDLUNG
 async function handleLive(
   savedState
 ) {
-
   const oldLive =
     Boolean(
       savedState.live
@@ -4547,7 +4247,6 @@ async function handleLive(
   if (
     savedState.deletePending
   ) {
-
     console.log(
       '⚠️ TikTok ist LIVE, aber eine alte Bot-Live-Meldung ist noch zur Löschung vorgemerkt.'
     );
@@ -4570,7 +4269,6 @@ async function handleLive(
   if (
     oldLive
   ) {
-
     console.log(
       '🔴 Jorne ist weiterhin LIVE.'
     );
@@ -4602,7 +4300,6 @@ async function handleLive(
   if (
     !claimed
   ) {
-
     console.log(
       '✅ Ein anderer GitHub-Lauf hat diesen Live-Start bereits übernommen.'
     );
@@ -4627,7 +4324,6 @@ async function handleLive(
 
 
   try {
-
     const sentAt =
       await startWhatsApp(
         store,
@@ -4674,7 +4370,6 @@ async function handleLive(
     );
 
   } catch (error) {
-
     await markSendFailure(
       error
     );
@@ -4725,11 +4420,9 @@ MAIN
 */
 
 async function main() {
-
   if (
     !process.env.MONGODB_URI
   ) {
-
     throw new Error(
       'MONGODB_URI fehlt.'
     );
@@ -4739,7 +4432,6 @@ async function main() {
   if (
     !process.env.WHATSAPP_PHONE
   ) {
-
     throw new Error(
       'WHATSAPP_PHONE fehlt.'
     );
@@ -4826,7 +4518,6 @@ async function main() {
   if (
     !currentLive
   ) {
-
     await handleOffline(
       savedState
     );
@@ -4851,11 +4542,8 @@ START + SAUBERES ENDE
 main()
   .then(
     async () => {
-
       try {
-
         await mongoose.disconnect();
-
       } catch {}
 
 
@@ -4881,7 +4569,6 @@ main()
   )
   .catch(
     async error => {
-
       console.error(
         '================================'
       );
@@ -4903,9 +4590,7 @@ main()
 
 
       try {
-
         await mongoose.disconnect();
-
       } catch {}
 
 
