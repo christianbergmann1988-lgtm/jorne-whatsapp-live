@@ -121,6 +121,7 @@ async function reserveLiveStart() {
       {
         username: TIKTOK_USERNAME,
         live: false,
+
         deletePending: {
           $ne: true
         }
@@ -239,17 +240,7 @@ async function markSendFailure(
 
     {
       $set: {
-
-        /*
-         * WICHTIG:
-         * LIVE bleibt TRUE.
-         *
-         * Dadurch startet der Cronjob WhatsApp
-         * NICHT jede Minute erneut.
-         */
-
         live: true,
-
         whatsappSent: false,
 
         whatsappError:
@@ -347,7 +338,8 @@ REMOTEAUTH + MONGODB FIX
 ============================================================
 */
 
-class FixedMongoStore extends MongoStore {
+class FixedMongoStore
+  extends MongoStore {
 
   constructor({
     mongoose,
@@ -460,13 +452,15 @@ class FixedMongoStore extends MongoStore {
             `${session}.zip`
         })
         .sort({
-          uploadDate: -1
+          uploadDate:
+            -1
         })
         .toArray();
 
 
     if (
-      documents.length > 1
+      documents.length >
+      1
     ) {
 
       for (
@@ -574,6 +568,32 @@ function withTimeout(
 }
 
 
+function assertPageAlive(
+  page,
+  step
+) {
+
+  if (!page) {
+
+    throw new Error(
+      `WhatsApp-Seite fehlt bei "${step}".`
+    );
+  }
+
+
+  if (
+    typeof page.isClosed ===
+      'function' &&
+    page.isClosed()
+  ) {
+
+    throw new Error(
+      `WhatsApp/Puppeteer-Seite wurde bei "${step}" geschlossen.`
+    );
+  }
+}
+
+
 /*
 ============================================================
 TIKTOK PRÜFEN
@@ -649,37 +669,6 @@ async function checkTikTokLive() {
 
 /*
 ============================================================
-PUPPETEER-SEITE PRÜFEN
-============================================================
-*/
-
-function assertPageAlive(
-  page,
-  step
-) {
-
-  if (!page) {
-
-    throw new Error(
-      `WhatsApp-Seite fehlt bei "${step}".`
-    );
-  }
-
-
-  if (
-    typeof page.isClosed === 'function' &&
-    page.isClosed()
-  ) {
-
-    throw new Error(
-      `WhatsApp/Puppeteer-Seite wurde bei "${step}" geschlossen.`
-    );
-  }
-}
-
-
-/*
-============================================================
 AUF STABILES WHATSAPP WARTEN
 ============================================================
 */
@@ -702,7 +691,8 @@ async function waitForStableWhatsApp(
 
 
   while (
-    Date.now() - started <
+    Date.now() -
+      started <
     WHATSAPP_READY_TIMEOUT_MS
   ) {
 
@@ -725,17 +715,21 @@ async function waitForStableWhatsApp(
     const pageAlive =
       page &&
       (
-        typeof page.isClosed !== 'function' ||
+        typeof page.isClosed !==
+          'function' ||
         !page.isClosed()
       );
 
 
     if (
-      state === 'CONNECTED' &&
+      state ===
+        'CONNECTED' &&
       pageAlive
     ) {
 
-      if (!stableSince) {
+      if (
+        !stableSince
+      ) {
 
         stableSince =
           Date.now();
@@ -749,7 +743,7 @@ async function waitForStableWhatsApp(
 
       if (
         Date.now() -
-        stableSince >=
+          stableSince >=
         WHATSAPP_STABLE_MS
       ) {
 
@@ -896,12 +890,7 @@ async function closeWhatsAppPopup(
         const candidates =
           [
             ...popup.querySelectorAll(
-              [
-                'button',
-                '[role="button"]',
-                '[tabindex]',
-                '[aria-label]'
-              ].join(',')
+              'button,[role="button"],[tabindex],[aria-label]'
             )
           ].filter(
             isVisible
@@ -967,13 +956,15 @@ async function closeWhatsAppPopup(
                   );
 
 
-                return (
-                  text === 'ok' ||
-                  text === 'okay' ||
-                  text === 'verstanden' ||
-                  text === 'fertig' ||
-                  text === 'weiter' ||
-                  text === 'nicht jetzt'
+                return [
+                  'ok',
+                  'okay',
+                  'verstanden',
+                  'fertig',
+                  'weiter',
+                  'nicht jetzt'
+                ].includes(
+                  text
                 );
               }
             );
@@ -1112,15 +1103,7 @@ async function inspectRightChannelArea(
       const rightElements =
         [
           ...document.querySelectorAll(
-            [
-              '[data-testid]',
-              '[aria-label]',
-              '[role]',
-              'header',
-              'main',
-              'section',
-              'div'
-            ].join(',')
+            '[data-testid],[aria-label],[role],header,main,section,div'
           )
         ]
           .filter(
@@ -1271,14 +1254,7 @@ async function openWhatsAppChannel(
         const elements =
           [
             ...document.querySelectorAll(
-              [
-                'button',
-                '[role="button"]',
-                '[role="tab"]',
-                '[tabindex]',
-                '[aria-label]',
-                '[data-testid]'
-              ].join(',')
+              'button,[role="button"],[role="tab"],[tabindex],[aria-label],[data-testid]'
             )
           ].filter(
             isVisible
@@ -1322,22 +1298,14 @@ async function openWhatsAppChannel(
 
           target =
             elements.find(
-              element => {
-
-                const testId =
-                  normalize(
-                    element.getAttribute(
-                      'data-testid'
-                    )
-                  );
-
-
-                return (
-                  testId.includes(
-                    'newsletter-tab-drawer'
+              element =>
+                normalize(
+                  element.getAttribute(
+                    'data-testid'
                   )
-                );
-              }
+                ).includes(
+                  'newsletter-tab-drawer'
+                )
             );
         }
 
@@ -1356,19 +1324,13 @@ async function openWhatsAppChannel(
 
 
         if (!target) {
-
           return false;
         }
 
 
         const clickable =
           target.closest(
-            [
-              'button',
-              '[role="button"]',
-              '[role="tab"]',
-              '[tabindex]'
-            ].join(',')
+            'button,[role="button"],[role="tab"],[tabindex]'
           ) ||
           target;
 
@@ -1841,12 +1803,7 @@ async function markComposer(
           const candidates =
             [
               ...document.querySelectorAll(
-                [
-                  '[contenteditable="true"]',
-                  '[role="textbox"]',
-                  '[data-lexical-editor="true"]',
-                  'textarea'
-                ].join(',')
+                '[contenteditable="true"],[role="textbox"],[data-lexical-editor="true"],textarea'
               )
             ].filter(
               isVisible
@@ -1967,7 +1924,6 @@ async function typeMultilineMessage(
 
       await page.keyboard.type(
         line,
-
         {
           delay: 25
         }
@@ -2000,22 +1956,12 @@ async function typeMultilineMessage(
 
 /*
 ============================================================
-BOT-LIVE-MELDUNGEN IM SICHTBAREN KANAL FINDEN
+BOT-LIVE-MELDUNGEN FINDEN
 
-WICHTIG:
-Wir verwenden NICHT client.getChannels().
-
-Wir arbeiten ausschließlich mit der bereits funktionierenden
-WhatsApp-Web-Kanaloberfläche.
-
-Eine Nachricht gilt nur dann als Bot-Live-Meldung, wenn sie
-BEIDE Merkmale enthält:
-
-1. LIVE_MESSAGE_PHRASE
-2. LIVE_URL
-
-Dadurch werden normale manuelle Beiträge des Accounts
-nicht als Bot-Live-Meldung behandelt.
+FIX:
+- bevorzugt echte WhatsApp-Nachrichtencontainer
+- keine zehn verschachtelten Text-Elemente mehr
+- identische Treffer werden zusammengeführt
 ============================================================
 */
 
@@ -2081,6 +2027,89 @@ async function findBotLiveMessageCandidates(
         }
 
 
+        function containsMessageText(
+          element
+        ) {
+
+          const text =
+            normalize(
+              element?.textContent
+            );
+
+
+          return (
+            text.includes(
+              phrase
+            ) &&
+            text.includes(
+              liveUrl
+            )
+          );
+        }
+
+
+        function isPlausibleMessageContainer(
+          element
+        ) {
+
+          if (
+            !element ||
+            !isVisible(
+              element
+            ) ||
+            !containsMessageText(
+              element
+            )
+          ) {
+
+            return false;
+          }
+
+
+          const rect =
+            element
+              .getBoundingClientRect();
+
+
+          if (
+            rect.left <
+            window.innerWidth *
+              0.30
+          ) {
+            return false;
+          }
+
+
+          if (
+            rect.width < 180 ||
+            rect.height < 45
+          ) {
+            return false;
+          }
+
+
+          if (
+            rect.width >
+            window.innerWidth *
+              0.80
+          ) {
+            return false;
+          }
+
+
+          if (
+            rect.height >
+            window.innerHeight *
+              0.60
+          ) {
+            return false;
+          }
+
+
+          return true;
+        }
+
+
         document
           .querySelectorAll(
             '[data-bot-live-candidate]'
@@ -2093,156 +2122,339 @@ async function findBotLiveMessageCandidates(
           );
 
 
-        const all =
-          [
-            ...document.querySelectorAll(
-              '*'
-            )
-          ];
-
-
-        const rawMatches =
-          all.filter(
-            element => {
-
-              if (
-                !isVisible(
-                  element
-                )
-              ) {
-                return false;
-              }
-
-
-              const text =
-                normalize(
-                  element.textContent
-                );
-
-
-              return (
-                text.includes(
-                  phrase
-                ) &&
-                text.includes(
-                  liveUrl
-                )
-              );
-            }
-          );
-
-
-        /*
-         * Wir wollen möglichst kleine Container.
-         * Große Eltern enthalten oft mehrere Beiträge.
-         */
-
-        rawMatches.sort(
-          (
-            a,
-            b
-          ) => {
-
-            const aArea =
-              a.getBoundingClientRect().width *
-              a.getBoundingClientRect().height;
-
-
-            const bArea =
-              b.getBoundingClientRect().width *
-              b.getBoundingClientRect().height;
-
-
-            return (
-              aArea -
-              bArea
-            );
-          }
-        );
-
-
         const chosen =
           [];
 
 
+        /*
+         * ERSTE WAHL:
+         * WhatsApp-Nachrichtencontainer
+         * besitzen häufig data-id.
+         */
+
+        const dataIdMatches =
+          [
+            ...document.querySelectorAll(
+              '[data-id]'
+            )
+          ].filter(
+            isPlausibleMessageContainer
+          );
+
+
         for (
-          const match
-          of rawMatches
+          const element
+          of dataIdMatches
         ) {
 
-          const rect =
-            match
-              .getBoundingClientRect();
-
-
-          /*
-           * Nur rechte Kanalansicht.
-           */
-
-          if (
-            rect.left <
-            window.innerWidth *
-              0.30
-          ) {
-            continue;
-          }
-
-
-          /*
-           * Riesige Container überspringen.
-           */
-
-          if (
-            rect.width >
-              window.innerWidth *
-                0.85 ||
-            rect.height >
-              window.innerHeight *
-                0.75
-          ) {
-            continue;
-          }
-
-
-          /*
-           * Nicht mehrere verschachtelte Elemente
-           * derselben Nachricht markieren.
-           */
-
-          const overlapsExisting =
+          const duplicate =
             chosen.some(
-              existing =>
-                existing.contains(
-                  match
-                ) ||
-                match.contains(
-                  existing
-                )
+              existing => {
+
+                return (
+                  existing === element ||
+                  existing.contains(
+                    element
+                  ) ||
+                  element.contains(
+                    existing
+                  )
+                );
+              }
             );
 
 
-          if (
-            overlapsExisting
-          ) {
-            continue;
+          if (!duplicate) {
+
+            chosen.push(
+              element
+            );
           }
-
-
-          chosen.push(
-            match
-          );
         }
 
 
         /*
-         * Zur Sicherheit höchstens 10.
+         * ZWEITE WAHL:
+         * typische Message-Container.
          */
 
+        if (
+          chosen.length === 0
+        ) {
+
+          const semanticMatches =
+            [
+              ...document.querySelectorAll(
+                '[data-testid*="msg"],[data-testid*="message"],[role="row"],[role="listitem"]'
+              )
+            ].filter(
+              isPlausibleMessageContainer
+            );
+
+
+          for (
+            const element
+            of semanticMatches
+          ) {
+
+            const duplicate =
+              chosen.some(
+                existing => {
+
+                  return (
+                    existing === element ||
+                    existing.contains(
+                      element
+                    ) ||
+                    element.contains(
+                      existing
+                    )
+                  );
+                }
+              );
+
+
+            if (!duplicate) {
+
+              chosen.push(
+                element
+              );
+            }
+          }
+        }
+
+
+        /*
+         * FALLBACK:
+         * Texttreffer suchen und
+         * nach oben zum Nachrichtencontainer gehen.
+         */
+
+        if (
+          chosen.length === 0
+        ) {
+
+          const rawMatches =
+            [
+              ...document.querySelectorAll(
+                '*'
+              )
+            ]
+              .filter(
+                isVisible
+              )
+              .filter(
+                containsMessageText
+              )
+              .sort(
+                (
+                  a,
+                  b
+                ) => {
+
+                  const ar =
+                    a.getBoundingClientRect();
+
+
+                  const br =
+                    b.getBoundingClientRect();
+
+
+                  return (
+                    ar.width *
+                      ar.height -
+                    br.width *
+                      br.height
+                  );
+                }
+              );
+
+
+          for (
+            const raw
+            of rawMatches
+          ) {
+
+            let current =
+              raw;
+
+
+            let best =
+              null;
+
+
+            for (
+              let depth = 0;
+              depth < 12 &&
+              current;
+              depth++
+            ) {
+
+              if (
+                isPlausibleMessageContainer(
+                  current
+                )
+              ) {
+
+                best =
+                  current;
+
+
+                const dataId =
+                  current.getAttribute(
+                    'data-id'
+                  );
+
+
+                const role =
+                  current.getAttribute(
+                    'role'
+                  );
+
+
+                const testId =
+                  current.getAttribute(
+                    'data-testid'
+                  ) ||
+                  '';
+
+
+                if (
+                  dataId ||
+                  role ===
+                    'row' ||
+                  role ===
+                    'listitem' ||
+                  testId
+                    .toLowerCase()
+                    .includes(
+                      'msg'
+                    ) ||
+                  testId
+                    .toLowerCase()
+                    .includes(
+                      'message'
+                    )
+                ) {
+
+                  break;
+                }
+              }
+
+
+              current =
+                current.parentElement;
+            }
+
+
+            if (!best) {
+              continue;
+            }
+
+
+            const duplicate =
+              chosen.some(
+                existing => {
+
+                  return (
+                    existing === best ||
+                    existing.contains(
+                      best
+                    ) ||
+                    best.contains(
+                      existing
+                    )
+                  );
+                }
+              );
+
+
+            if (!duplicate) {
+
+              chosen.push(
+                best
+              );
+            }
+          }
+        }
+
+
+        /*
+         * GEOMETRISCHE DEDUPLIZIERUNG
+         */
+
+        const deduped =
+          [];
+
+
+        for (
+          const element
+          of chosen
+        ) {
+
+          const rect =
+            element
+              .getBoundingClientRect();
+
+
+          const duplicate =
+            deduped.some(
+              existing => {
+
+                const other =
+                  existing
+                    .getBoundingClientRect();
+
+
+                return (
+                  Math.abs(
+                    rect.x -
+                    other.x
+                  ) < 8 &&
+                  Math.abs(
+                    rect.y -
+                    other.y
+                  ) < 8 &&
+                  Math.abs(
+                    rect.width -
+                    other.width
+                  ) < 12 &&
+                  Math.abs(
+                    rect.height -
+                    other.height
+                  ) < 12
+                );
+              }
+            );
+
+
+          if (!duplicate) {
+
+            deduped.push(
+              element
+            );
+          }
+        }
+
+
         const limited =
-          chosen.slice(
-            0,
-            10
-          );
+          deduped
+            .sort(
+              (
+                a,
+                b
+              ) =>
+                a
+                  .getBoundingClientRect()
+                  .y -
+                b
+                  .getBoundingClientRect()
+                  .y
+            )
+            .slice(
+              0,
+              10
+            );
 
 
         limited.forEach(
@@ -2274,18 +2486,35 @@ async function findBotLiveMessageCandidates(
 
             return {
               index,
-              text:
-                normalize(
-                  element.textContent
-                ),
+
+              dataId:
+                element.getAttribute(
+                  'data-id'
+                ) ||
+                null,
+
+              tag:
+                element.tagName,
+
               x:
-                rect.x,
+                Math.round(
+                  rect.x
+                ),
+
               y:
-                rect.y,
+                Math.round(
+                  rect.y
+                ),
+
               width:
-                rect.width,
+                Math.round(
+                  rect.width
+                ),
+
               height:
-                rect.height
+                Math.round(
+                  rect.height
+                )
             };
           }
         );
@@ -2298,8 +2527,21 @@ async function findBotLiveMessageCandidates(
 
 
   console.log(
-    `🔎 Gefundene Bot-Live-Kandidaten: ${candidates.length}`
+    `🔎 Gefundene Bot-Live-Meldungen: ${candidates.length}`
   );
+
+
+  if (
+    candidates.length
+  ) {
+
+    console.log(
+      '🧭 Kandidaten:',
+      JSON.stringify(
+        candidates
+      )
+    );
+  }
 
 
   return candidates;
@@ -2308,7 +2550,7 @@ async function findBotLiveMessageCandidates(
 
 /*
 ============================================================
-BOT-MELDUNG NACH DEM SENDEN PRÜFEN
+BOT-MELDUNG NACH SENDEN PRÜFEN
 ============================================================
 */
 
@@ -2356,7 +2598,8 @@ async function sendLiveMessage(
 
 
   if (
-    state !== 'CONNECTED'
+    state !==
+    'CONNECTED'
   ) {
 
     throw new Error(
@@ -2491,7 +2734,15 @@ async function sendLiveMessage(
 
 /*
 ============================================================
-MENÜ EINER EXAKT MARKIERTEN BOT-MELDUNG FINDEN
+MENÜ DER EXAKTEN BOT-MELDUNG FINDEN
+
+FIX:
+Das Menü wird nicht mehr nur innerhalb
+des Text-Elements gesucht.
+
+Nach dem Hover wird zusätzlich nach
+einem passenden Menüknopf direkt in
+der Umgebung der Nachricht gesucht.
 ============================================================
 */
 
@@ -2511,51 +2762,127 @@ async function markMenuButtonForCandidate(
 
 
   if (!target) {
-
     return false;
   }
 
 
-  const box =
+  await target.evaluate(
+    element => {
+
+      element.scrollIntoView({
+        block: 'center',
+        inline: 'nearest'
+      });
+    }
+  );
+
+
+  await sleep(
+    700
+  );
+
+
+  let box =
     await target.boundingBox();
 
 
   if (!box) {
-
     return false;
   }
 
 
   /*
-   * Maus über exakt diese Nachricht.
+   * Mehrere Hoverpositionen.
+   * WhatsApp zeigt das Menü teilweise
+   * erst an der rechten oberen Ecke.
    */
 
-  await page.mouse.move(
+  const hoverPoints =
+    [
+      [
+        box.x +
+          box.width *
+            0.65,
 
-    box.x +
-      Math.max(
-        10,
-        box.width -
-          30
-      ),
+        box.y +
+          Math.min(
+            30,
+            box.height *
+              0.35
+          )
+      ],
 
-    box.y +
-      Math.min(
-        30,
-        box.height /
-          2
-      )
-  );
+      [
+        box.x +
+          Math.max(
+            20,
+            box.width -
+              28
+          ),
+
+        box.y +
+          Math.min(
+            28,
+            box.height *
+              0.30
+          )
+      ],
+
+      [
+        box.x +
+          Math.max(
+            20,
+            box.width -
+              28
+          ),
+
+        box.y +
+          box.height *
+            0.50
+      ]
+    ];
 
 
-  await sleep(
-    1200
-  );
+  for (
+    const [
+      x,
+      y
+    ]
+    of hoverPoints
+  ) {
+
+    await page.mouse.move(
+      x,
+      y,
+      {
+        steps: 8
+      }
+    );
+
+
+    await sleep(
+      700
+    );
+  }
+
+
+  box =
+    await target.boundingBox();
+
+
+  if (!box) {
+    return false;
+  }
 
 
   const menuMarked =
     await page.evaluate(
-      candidateIndex => {
+      (
+        {
+          candidateIndex,
+          targetBox
+        }
+      ) => {
 
         function visible(
           element
@@ -2586,6 +2913,149 @@ async function markMenuButtonForCandidate(
         }
 
 
+        function descriptor(
+          element
+        ) {
+
+          const aria =
+            (
+              element.getAttribute(
+                'aria-label'
+              ) ||
+              ''
+            )
+              .toLowerCase();
+
+
+          const title =
+            (
+              element.getAttribute(
+                'title'
+              ) ||
+              ''
+            )
+              .toLowerCase();
+
+
+          const testId =
+            (
+              element.getAttribute(
+                'data-testid'
+              ) ||
+              ''
+            )
+              .toLowerCase();
+
+
+          const dataIcon =
+            (
+              element.getAttribute(
+                'data-icon'
+              ) ||
+              ''
+            )
+              .toLowerCase();
+
+
+          const html =
+            (
+              element.innerHTML ||
+              ''
+            )
+              .toLowerCase();
+
+
+          const text =
+            (
+              element.textContent ||
+              ''
+            )
+              .replace(
+                /\s+/g,
+                ' '
+              )
+              .trim()
+              .toLowerCase();
+
+
+          return {
+            aria,
+            title,
+            testId,
+            dataIcon,
+            html,
+            text
+          };
+        }
+
+
+        function looksLikeMenu(
+          element
+        ) {
+
+          const d =
+            descriptor(
+              element
+            );
+
+
+          return (
+            d.aria.includes(
+              'menü'
+            ) ||
+            d.aria.includes(
+              'menu'
+            ) ||
+            d.aria.includes(
+              'weitere'
+            ) ||
+            d.aria.includes(
+              'more'
+            ) ||
+            d.title.includes(
+              'menü'
+            ) ||
+            d.title.includes(
+              'menu'
+            ) ||
+            d.title.includes(
+              'weitere'
+            ) ||
+            d.title.includes(
+              'more'
+            ) ||
+            d.testId.includes(
+              'menu'
+            ) ||
+            d.testId.includes(
+              'dropdown'
+            ) ||
+            d.dataIcon.includes(
+              'down'
+            ) ||
+            d.dataIcon.includes(
+              'chevron'
+            ) ||
+            d.html.includes(
+              'data-icon="down"'
+            ) ||
+            d.html.includes(
+              'data-icon="chevron'
+            ) ||
+            d.html.includes(
+              'down-context'
+            ) ||
+            d.html.includes(
+              'chevron-down'
+            ) ||
+            d.text ===
+              '⌄' ||
+            d.text ===
+              '▼'
+          );
+        }
+
+
         document
           .querySelectorAll(
             '[data-bot-message-menu]'
@@ -2605,9 +3075,20 @@ async function markMenuButtonForCandidate(
 
 
         if (!target) {
-          return false;
+
+          return {
+            found: false,
+            reason:
+              'candidate-missing'
+          };
         }
 
+
+        /*
+         * ZUERST:
+         * innerhalb der Nachricht und
+         * bis 12 Eltern hoch.
+         */
 
         let container =
           target;
@@ -2615,7 +3096,7 @@ async function markMenuButtonForCandidate(
 
         for (
           let depth = 0;
-          depth < 8 &&
+          depth < 12 &&
           container;
           depth++
         ) {
@@ -2623,108 +3104,46 @@ async function markMenuButtonForCandidate(
           const buttons =
             [
               ...container.querySelectorAll(
-                [
-                  'button',
-                  '[role="button"]',
-                  '[aria-label]',
-                  '[data-testid]'
-                ].join(',')
+                'button,[role="button"],[aria-label],[title],[data-testid],[data-icon],[tabindex]'
               )
             ].filter(
               visible
             );
 
 
-          const button =
-            buttons.find(
-              element => {
+          for (
+            const raw
+            of buttons
+          ) {
 
-                const aria =
-                  (
-                    element.getAttribute(
-                      'aria-label'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
+            const clickable =
+              raw.closest(
+                'button,[role="button"],[tabindex]'
+              ) ||
+              raw;
 
 
-                const title =
-                  (
-                    element.getAttribute(
-                      'title'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
+            if (
+              visible(
+                clickable
+              ) &&
+              looksLikeMenu(
+                raw
+              )
+            ) {
+
+              clickable.setAttribute(
+                'data-bot-message-menu',
+                'true'
+              );
 
 
-                const testId =
-                  (
-                    element.getAttribute(
-                      'data-testid'
-                    ) ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                const html =
-                  (
-                    element.innerHTML ||
-                    ''
-                  )
-                    .toLowerCase();
-
-
-                return (
-                  aria.includes(
-                    'menü'
-                  ) ||
-                  aria.includes(
-                    'menu'
-                  ) ||
-                  aria.includes(
-                    'weitere'
-                  ) ||
-                  aria.includes(
-                    'more'
-                  ) ||
-                  title.includes(
-                    'menü'
-                  ) ||
-                  title.includes(
-                    'menu'
-                  ) ||
-                  title.includes(
-                    'weitere'
-                  ) ||
-                  title.includes(
-                    'more'
-                  ) ||
-                  testId.includes(
-                    'menu'
-                  ) ||
-                  html.includes(
-                    'chevron'
-                  ) ||
-                  html.includes(
-                    'down'
-                  )
-                );
-              }
-            );
-
-
-          if (button) {
-
-            button.setAttribute(
-              'data-bot-message-menu',
-              'true'
-            );
-
-
-            return true;
+              return {
+                found: true,
+                mode:
+                  'ancestor'
+              };
+            }
           }
 
 
@@ -2733,14 +3152,208 @@ async function markMenuButtonForCandidate(
         }
 
 
-        return false;
+        /*
+         * FALLBACK:
+         * global sichtbare Buttons suchen,
+         * aber ausschließlich unmittelbar
+         * neben der Nachricht.
+         */
+
+        const globalElements =
+          [
+            ...document.querySelectorAll(
+              'button,[role="button"],[aria-label],[title],[data-testid],[data-icon],[tabindex]'
+            )
+          ].filter(
+            visible
+          );
+
+
+        const box =
+          targetBox;
+
+
+        const centerY =
+          box.y +
+          box.height /
+            2;
+
+
+        const nearby =
+          [];
+
+
+        for (
+          const raw
+          of globalElements
+        ) {
+
+          if (
+            !looksLikeMenu(
+              raw
+            )
+          ) {
+            continue;
+          }
+
+
+          const clickable =
+            raw.closest(
+              'button,[role="button"],[tabindex]'
+            ) ||
+            raw;
+
+
+          if (
+            !visible(
+              clickable
+            )
+          ) {
+            continue;
+          }
+
+
+          const rect =
+            clickable
+              .getBoundingClientRect();
+
+
+          const cy =
+            rect.y +
+            rect.height /
+              2;
+
+
+          const verticalDistance =
+            Math.abs(
+              cy -
+              centerY
+            );
+
+
+          const horizontalOkay =
+            rect.x >=
+              box.x -
+                80 &&
+            rect.x <=
+              box.x +
+                box.width +
+                120;
+
+
+          const verticalOkay =
+            verticalDistance <=
+            Math.max(
+              90,
+              box.height *
+                0.85
+            );
+
+
+          if (
+            horizontalOkay &&
+            verticalOkay
+          ) {
+
+            const dx =
+              Math.abs(
+                (
+                  rect.x +
+                  rect.width /
+                    2
+                ) -
+                (
+                  box.x +
+                  box.width
+                )
+              );
+
+
+            const score =
+              verticalDistance +
+              dx *
+                0.35;
+
+
+            nearby.push({
+              clickable,
+              score
+            });
+          }
+        }
+
+
+        nearby.sort(
+          (
+            a,
+            b
+          ) =>
+            a.score -
+            b.score
+        );
+
+
+        if (
+          nearby.length
+        ) {
+
+          nearby[0]
+            .clickable
+            .setAttribute(
+              'data-bot-message-menu',
+              'true'
+            );
+
+
+          return {
+            found: true,
+            mode:
+              'nearby'
+          };
+        }
+
+
+        return {
+          found: false,
+          reason:
+            'no-menu-near-message'
+        };
       },
 
-      candidateIndex
+      {
+        candidateIndex,
+
+        targetBox: {
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height
+        }
+      }
     );
 
 
-  return menuMarked;
+  if (
+    !menuMarked?.found
+  ) {
+
+    console.log(
+      '⚠️ Nachrichtenmenü nicht gefunden:',
+      menuMarked?.reason ||
+      'unbekannt'
+    );
+
+
+    return false;
+  }
+
+
+  console.log(
+    `✅ Nachrichtenmenü gefunden (${menuMarked.mode}).`
+  );
+
+
+  return true;
 }
 
 
@@ -2801,12 +3414,7 @@ async function markDeleteMenuItem(
       const elements =
         [
           ...document.querySelectorAll(
-            [
-              '[role="menuitem"]',
-              'button',
-              '[role="button"]',
-              '[tabindex]'
-            ].join(',')
+            '[role="menuitem"],button,[role="button"],[tabindex]'
           )
         ].filter(
           visible
@@ -2860,13 +3468,6 @@ async function markDeleteMenuItem(
 /*
 ============================================================
 AUSSCHLIESSLICH "FÜR ALLE LÖSCHEN" FINDEN
-
-WICHTIG:
-KEIN Fallback auf "Löschen".
-KEIN Fallback auf "Nur für mich löschen".
-
-Wenn "Für alle löschen" nicht angeboten wird,
-bricht der Bot die Löschung ab.
 ============================================================
 */
 
@@ -2948,11 +3549,7 @@ async function markDeleteForEveryoneButton(
       const buttons =
         [
           ...dialog.querySelectorAll(
-            [
-              'button',
-              '[role="button"]',
-              '[tabindex]'
-            ].join(',')
+            'button,[role="button"],[tabindex]'
           )
         ].filter(
           visible
@@ -3014,7 +3611,7 @@ async function markDeleteForEveryoneButton(
 
 /*
 ============================================================
-EINE EINZELNE MARKIERTE BOT-MELDUNG LÖSCHEN
+EINE BOT-MELDUNG LÖSCHEN
 ============================================================
 */
 
@@ -3063,7 +3660,7 @@ async function deleteOneBotCandidate(
 
 
   await sleep(
-    1500
+    1800
   );
 
 
@@ -3110,7 +3707,7 @@ async function deleteOneBotCandidate(
 
 
   await sleep(
-    1500
+    1800
   );
 
 
@@ -3187,7 +3784,7 @@ async function deleteOneBotCandidate(
 
 
   await sleep(
-    4000
+    4500
   );
 
 
@@ -3202,18 +3799,7 @@ async function deleteOneBotCandidate(
 
 /*
 ============================================================
-ALLE AKTUELL SICHTBAREN BOT-LIVE-MELDUNGEN LÖSCHEN
-
-Warum alle?
-
-Falls durch frühere Tests zwei Bot-Live-Meldungen vorhanden
-sind, werden beide entfernt.
-
-ABER:
-Es werden ausschließlich Nachrichten berücksichtigt,
-die LIVE_MESSAGE_PHRASE UND LIVE_URL enthalten.
-
-Manuelle andere Beiträge des Accounts bleiben unberührt.
+ALLE SICHTBAREN BOT-LIVE-MELDUNGEN LÖSCHEN
 ============================================================
 */
 
@@ -3226,7 +3812,8 @@ async function deleteBotLiveMessages(
 
 
   if (
-    state !== 'CONNECTED'
+    state !==
+    'CONNECTED'
   ) {
 
     throw new Error(
@@ -3270,9 +3857,8 @@ async function deleteBotLiveMessages(
 
 
   /*
-   * Maximal 10 Runden.
-   * Nach jeder Löschung wird die Oberfläche neu gesucht,
-   * weil WhatsApp das DOM verändert.
+   * Nach jeder Löschung suchen wir
+   * die Oberfläche komplett neu.
    */
 
   for (
@@ -3299,12 +3885,6 @@ async function deleteBotLiveMessages(
       break;
     }
 
-
-    /*
-     * Sicherheit:
-     * Wir löschen immer nur Kandidat 0.
-     * Danach wird komplett neu gesucht.
-     */
 
     const deleted =
       await deleteOneBotCandidate(
@@ -3333,14 +3913,10 @@ async function deleteBotLiveMessages(
 
 
     await sleep(
-      2500
+      3000
     );
   }
 
-
-  /*
-   * Abschlussprüfung.
-   */
 
   const remaining =
     await findBotLiveMessageCandidates(
@@ -3374,15 +3950,6 @@ async function deleteBotLiveMessages(
   if (
     totalDeleted === 0
   ) {
-
-    /*
-     * Es ist keine passende Meldung mehr da.
-     * Das kann bedeuten:
-     * - bereits manuell gelöscht
-     * - bereits vorher automatisch gelöscht
-     *
-     * Für den Offline-Reset ist das okay.
-     */
 
     console.log(
       'ℹ️ Keine passende Bot-Live-Meldung mehr vorhanden.'
@@ -3547,7 +4114,9 @@ async function startWhatsApp(
             );
 
 
-            if (!readySeen) {
+            if (
+              !readySeen
+            ) {
 
               readySeen =
                 true;
@@ -3571,27 +4140,23 @@ async function startWhatsApp(
         );
 
 
+        /*
+         * Repository ist öffentlich.
+         * Kopplungscode deshalb NICHT
+         * öffentlich ins Actions-Log schreiben.
+         */
+
         client.on(
           'code',
-          code => {
+          () => {
 
             console.log(
-              '================================'
+              '📱 WhatsApp benötigt einen neuen Kopplungscode.'
             );
 
 
             console.log(
-              '📱 WHATSAPP KOPPLUNGSCODE:'
-            );
-
-
-            console.log(
-              code
-            );
-
-
-            console.log(
-              '================================'
+              '🛡️ Der Code wird aus Sicherheitsgründen nicht im öffentlichen Actions-Log ausgegeben.'
             );
           }
         );
@@ -3614,7 +4179,9 @@ async function startWhatsApp(
           'disconnected',
           reason => {
 
-            if (!readySeen) {
+            if (
+              !readySeen
+            ) {
 
               reject(
                 new Error(
@@ -3802,11 +4369,6 @@ async function handleOffline(
     );
 
 
-  /*
-   * Kein vorheriger Live-Status und
-   * keine offene Löschung.
-   */
-
   if (
     !oldLive &&
     !shouldDelete
@@ -3831,11 +4393,6 @@ async function handleOffline(
   );
 
 
-  /*
-   * Es wurde für diesen Live-Start gar keine
-   * WhatsApp-Meldung erfolgreich gespeichert.
-   */
-
   if (
     !shouldDelete
   ) {
@@ -3857,12 +4414,6 @@ async function handleOffline(
   }
 
 
-  /*
-   * Bevor WhatsApp gestartet wird, Löschung vormerken.
-   * Falls der GitHub-Run abstürzt, weiß der nächste Lauf,
-   * dass noch eine Löschung offen ist.
-   */
-
   await markDeletePending();
 
 
@@ -3881,12 +4432,10 @@ async function handleOffline(
       await startWhatsApp(
         store,
 
-        async client => {
-
-          return await deleteBotLiveMessages(
+        async client =>
+          await deleteBotLiveMessages(
             client
-          );
-        }
+          )
       );
 
 
@@ -3995,15 +4544,6 @@ async function handleLive(
     );
 
 
-  /*
-   * Wenn eine alte Offline-Löschung noch offen ist,
-   * schicken wir NICHT einfach eine neue Live-Meldung
-   * darüber.
-   *
-   * Dadurch vermeiden wir alte + neue Bot-Links
-   * gleichzeitig im Kanal.
-   */
-
   if (
     savedState.deletePending
   ) {
@@ -4059,7 +4599,9 @@ async function handleLive(
     await reserveLiveStart();
 
 
-  if (!claimed) {
+  if (
+    !claimed
+  ) {
 
     console.log(
       '✅ Ein anderer GitHub-Lauf hat diesen Live-Start bereits übernommen.'
@@ -4090,12 +4632,10 @@ async function handleLive(
       await startWhatsApp(
         store,
 
-        async client => {
-
-          return await sendLiveMessage(
+        async client =>
+          await sendLiveMessage(
             client
-          );
-        }
+          )
       );
 
 
@@ -4186,10 +4726,6 @@ MAIN
 
 async function main() {
 
-  /*
-   * Secrets prüfen.
-   */
-
   if (
     !process.env.MONGODB_URI
   ) {
@@ -4240,17 +4776,9 @@ async function main() {
   );
 
 
-  /*
-   * TikTok genau einmal prüfen.
-   */
-
   const currentLive =
     await checkTikTokLive();
 
-
-  /*
-   * Gespeicherten Zustand laden.
-   */
 
   const savedState =
     await getSavedState();
@@ -4295,10 +4823,6 @@ async function main() {
   );
 
 
-  /*
-   * OFFLINE
-   */
-
   if (
     !currentLive
   ) {
@@ -4311,10 +4835,6 @@ async function main() {
     return;
   }
 
-
-  /*
-   * LIVE
-   */
 
   await handleLive(
     savedState
